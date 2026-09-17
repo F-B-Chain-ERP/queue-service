@@ -1,3 +1,45 @@
+server:
+  port: ${SERVER_PORT:8090}
+
 spring:
   application:
     name: queue-service
+  profiles:
+    active: ${SPRING_PROFILES_ACTIVE:dev}
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: none
+    properties:
+      hibernate:
+        default_schema: public
+        format_sql: false
+  rabbitmq:
+    host: ${RABBITMQ_HOST:localhost}
+    port: ${RABBITMQ_PORT:5672}
+    username: ${RABBITMQ_USER:erp_rabbit}
+    password: ${RABBITMQ_PASS:erp123456@}
+    virtual-host: ${RABBITMQ_VHOST:erp_vhost}
+    listener:
+      simple:
+        acknowledge-mode: manual
+        prefetch: 1
+        concurrency: 2
+        max-concurrency: 5
+
+app:
+  minio:
+    endpoint: ${MINIO_ENDPOINT:http://localhost:9000}
+    access-key: ${MINIO_ACCESS_KEY:erp_minio}
+    secret-key: ${MINIO_SECRET_KEY:erp123456@}
+    bucket-name: ${MINIO_REPORT_BUCKET:erp-reports}
+    public-url: ${MINIO_PUBLIC_URL:/storage}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      show-details: always
