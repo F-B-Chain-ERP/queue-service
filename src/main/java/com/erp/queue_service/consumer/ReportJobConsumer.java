@@ -1,6 +1,5 @@
 package com.erp.queue_service.consumer;
 
-import com.erp.queue_service.configuration.RabbitMQConsumerConfig;
 import com.erp.queue_service.handler.ReportJobDispatcher;
 import com.erp.queue_service.messaging.ReportMessage;
 import com.rabbitmq.client.Channel;
@@ -31,7 +30,7 @@ public class ReportJobConsumer {
      * Tiếp nhận message từ hàng đợi {@code erp.report.queue}.
      * Sử dụng xác nhận thủ công (MANUAL ACK) để đảm bảo không mất thông điệp khi xảy ra sự cố.
      */
-    @RabbitListener(queues = RabbitMQConsumerConfig.REPORT_QUEUE, containerFactory = "rabbitListenerContainerFactory")
+    @RabbitListener(queues = "${app.rabbitmq.report.queue:erp.report.queue}", containerFactory = "rabbitListenerContainerFactory")
     public void consumeReportJob(ReportMessage message, Channel channel,
                                  @Header(AmqpHeaders.DELIVERY_TAG) long deliveryTag) throws IOException {
         log.info("[RabbitMQ-Consumer] Tiếp nhận thông điệp báo cáo: JobID={}, Module={}, Type={}",

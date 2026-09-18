@@ -8,7 +8,7 @@ spring:
     password: ${DB_PASSWORD:erp123456@}
     driver-class-name: org.postgresql.Driver
   rabbitmq:
-    host: ${RABBITMQ_HOST:163.61.72.183}
+    host: ${RABBITMQ_HOST:localhost}
     port: ${RABBITMQ_PORT:5672}
     username: ${RABBITMQ_USER:erp_rabbit}
     password: ${RABBITMQ_PASS:erp123456@}

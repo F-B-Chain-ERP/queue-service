@@ -34,6 +34,15 @@ app:
     secret-key: ${MINIO_SECRET_KEY:erp123456@}
     bucket-name: ${MINIO_REPORT_BUCKET:erp-reports}
     public-url: ${MINIO_PUBLIC_URL:/storage}
+  rabbitmq:
+    report:
+      exchange: ${RABBITMQ_REPORT_EXCHANGE:erp.report.exchange}
+      dl-exchange: ${RABBITMQ_REPORT_DL_EXCHANGE:erp.report.dl.exchange}
+      queue: ${RABBITMQ_REPORT_QUEUE:erp.report.queue}
+      dlq: ${RABBITMQ_REPORT_DLQ:erp.report.dlq}
+      routing-key: ${RABBITMQ_REPORT_ROUTING_KEY:report.generate}
+      dl-routing-key: ${RABBITMQ_REPORT_DL_ROUTING_KEY:report.dead}
+      ttl: ${RABBITMQ_REPORT_TTL:1800000}
 
 management:
   endpoints:
