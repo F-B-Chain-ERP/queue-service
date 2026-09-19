@@ -1,0 +1,28 @@
+server:
+  port: 8090
+
+spring:
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://${DB_HOST:163.61.72.183}:${DB_PORT:5432}/${DB_NAME:erp_dev}}
+    username: ${DB_USERNAME:erp_user}
+    password: ${DB_PASSWORD:erp123456@}
+    driver-class-name: org.postgresql.Driver
+  rabbitmq:
+    host: ${RABBITMQ_HOST:localhost}
+    port: ${RABBITMQ_PORT:5672}
+    username: ${RABBITMQ_USER:erp_rabbit}
+    password: ${RABBITMQ_PASS:erp123456@}
+    virtual-host: ${RABBITMQ_VHOST:erp_vhost}
+
+app:
+  minio:
+    endpoint: ${MINIO_ENDPOINT:http://${MINIO_HOST:163.61.72.183}:${MINIO_PORT:9000}}
+    access-key: ${MINIO_ACCESS_KEY:erp_minio}
+    secret-key: ${MINIO_SECRET_KEY:erp123456@}
+    bucket-name: ${MINIO_REPORT_BUCKET:erp-reports}
+    public-url: ${MINIO_PUBLIC_URL:http://${MINIO_HOST:163.61.72.183}:${MINIO_PORT:9000}}
+
+logging:
+  level:
+    com.erp: DEBUG
+    org.springframework.amqp: INFO
