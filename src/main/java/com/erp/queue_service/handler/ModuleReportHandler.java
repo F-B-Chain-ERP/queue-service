@@ -1,6 +1,6 @@
 package com.erp.queue_service.handler;
 
-import com.erp.queue_service.export.ReportDataContext;
+import com.erp.core.report.ReportDataContext;
 import com.erp.queue_service.messaging.ReportMessage;
 
 /**

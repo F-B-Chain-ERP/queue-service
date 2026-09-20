@@ -5,8 +5,9 @@ import com.erp.core.enums.ExportFormat;
 import com.erp.core.enums.ReportStatus;
 import com.erp.queue_service.export.ExportStrategy;
 import com.erp.queue_service.export.ExportStrategyFactory;
-import com.erp.queue_service.export.ReportDataContext;
+import com.erp.core.report.ReportDataContext;
 import com.erp.queue_service.messaging.ReportMessage;
+import com.erp.queue_service.notification.ReportSseNotifier;
 import com.erp.queue_service.repository.ReportJobRepository;
 import com.erp.queue_service.service.MinioStorageService;
 import org.slf4j.Logger;
@@ -33,15 +34,18 @@ public class ReportJobDispatcher {
     private final ExportStrategyFactory strategyFactory;
     private final MinioStorageService minioStorageService;
     private final ReportJobRepository reportJobRepository;
+    private final ReportSseNotifier reportSseNotifier;
 
     public ReportJobDispatcher(List<ModuleReportHandler> handlers,
                                ExportStrategyFactory strategyFactory,
                                MinioStorageService minioStorageService,
-                               ReportJobRepository reportJobRepository) {
+                               ReportJobRepository reportJobRepository,
+                               ReportSseNotifier reportSseNotifier) {
         this.handlers = handlers;
         this.strategyFactory = strategyFactory;
         this.minioStorageService = minioStorageService;
         this.reportJobRepository = reportJobRepository;
+        this.reportSseNotifier = reportSseNotifier;
     }
 
     /**
@@ -90,6 +94,8 @@ public class ReportJobDispatcher {
             job.setCompletedAt(Instant.now());
             reportJobRepository.save(job);
 
+            reportSseNotifier.reportDone(message, fileUrl, originalFileName);
+
             log.info("[Dispatcher] Hoàn tất ReportJob ID: {}. File URL: {}", message.getJobId(), fileUrl);
 
         } catch (Exception e) {
@@ -98,6 +104,9 @@ public class ReportJobDispatcher {
             job.setErrorMessage(e.getMessage());
             job.setCompletedAt(Instant.now());
             reportJobRepository.save(job);
+
+            reportSseNotifier.reportFailed(message, e.getMessage());
+
             throw new RuntimeException("Lỗi xử lý báo cáo: " + e.getMessage(), e);
         }
     }

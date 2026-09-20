@@ -20,6 +20,12 @@ spring:
     username: ${RABBITMQ_USER:erp_rabbit}
     password: ${RABBITMQ_PASS:erp123456@}
     virtual-host: ${RABBITMQ_VHOST:erp_vhost}
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+      timeout: 5s
     listener:
       simple:
         acknowledge-mode: manual
@@ -34,6 +40,9 @@ app:
     secret-key: ${MINIO_SECRET_KEY:erp123456@}
     bucket-name: ${MINIO_REPORT_BUCKET:erp-reports}
     public-url: ${MINIO_PUBLIC_URL:/storage}
+  report:
+    minio-bucket-name: ${MINIO_REPORT_BUCKET:erp-reports}
+    logo-path: ${REPORT_LOGO_PATH:C:/ERP-UTT/image.png}
   rabbitmq:
     report:
       exchange: ${RABBITMQ_REPORT_EXCHANGE:erp.report.exchange}
