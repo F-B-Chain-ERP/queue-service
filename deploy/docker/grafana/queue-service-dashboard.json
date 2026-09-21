@@ -1,0 +1,574 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "id": 100,
+      "title": "TẦNG 1: HIỆU NĂNG ỨNG DỤNG & HTTP SIGNALS (SPRING BOOT ACTUATOR)",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "drawStyle": "line",
+            "fillOpacity": 20,
+            "lineWidth": 2
+          },
+          "unit": "reqps"
+        }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 1 },
+      "id": 1,
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["mean", "max", "last"] },
+        "tooltip": { "mode": "multi" }
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(http_server_requests_seconds_count{application=~\"$application\"}[1m])) by (status, uri)",
+          "legendFormat": "{{status}} - {{uri}}"
+        }
+      ],
+      "title": "Throughput (RPS), Total HTTP Status (200 vs 400 vs 500)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisCenteredZero": false,
+            "drawStyle": "line",
+            "fillOpacity": 15,
+            "lineWidth": 2
+          },
+          "unit": "s"
+        }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 1 },
+      "id": 2,
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["mean", "max", "last"] },
+        "tooltip": { "mode": "multi" }
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum(rate(http_server_requests_seconds_bucket{application=~\"$application\"}[1m])) by (le))",
+          "legendFormat": "P50 (50th percentile)"
+        },
+        {
+          "expr": "histogram_quantile(0.90, sum(rate(http_server_requests_seconds_bucket{application=~\"$application\"}[1m])) by (le))",
+          "legendFormat": "P90 (90th percentile)"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(http_server_requests_seconds_bucket{application=~\"$application\"}[1m])) by (le))",
+          "legendFormat": "P95 (95th percentile)"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum(rate(http_server_requests_seconds_bucket{application=~\"$application\"}[1m])) by (le))",
+          "legendFormat": "P99 (99th percentile)"
+        }
+      ],
+      "title": "ĐỘ TRỄ PHÂN VỊ P50, P90, P95, P99",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10
+          },
+          "unit": "s"
+        }
+      },
+      "gridPos": { "h": 8, "w": 18, "x": 0, "y": 9 },
+      "id": 3,
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["mean", "max"] },
+        "tooltip": { "mode": "multi" }
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(http_server_requests_seconds_bucket{application=~\"$application\", uri!~\"/actuator.*\"}[1m])) by (le, uri))",
+          "legendFormat": "p95 Latency - {{uri}}"
+        }
+      ],
+      "title": "ĐỘ TRỄ CHI TIẾT TỪNG ENDPOINT (Top Latency Breakdown)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "max": 100,
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "#EAB839", "value": 1 },
+              { "color": "red", "value": 5 }
+            ]
+          },
+          "unit": "percent"
+        }
+      },
+      "gridPos": { "h": 8, "w": 6, "x": 18, "y": 9 },
+      "id": 4,
+      "options": {
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true
+      },
+      "targets": [
+        {
+          "expr": "(sum(rate(http_server_requests_seconds_count{application=~\"$application\", status=~\"5..\"}[1m])) or vector(0)) / (sum(rate(http_server_requests_seconds_count{application=~\"$application\"}[1m])) > 0) * 100 or vector(0)",
+          "legendFormat": "HTTP Error Rate"
+        }
+      ],
+      "title": "TỈ LỆ REQUEST LỖI (Error Rate %)",
+      "type": "gauge"
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 17 },
+      "id": 200,
+      "title": "TẦNG 2: CONNECTION POOL & POSTGRESQL DATABASE (ĐIỂM NGHẼN NẶNG)",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "max": 100,
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "#EAB839", "value": 70 },
+              { "color": "red", "value": 90 }
+            ]
+          },
+          "unit": "percent"
+        }
+      },
+      "gridPos": { "h": 8, "w": 6, "x": 0, "y": 18 },
+      "id": 5,
+      "options": {
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "showThresholdMarkers": true
+      },
+      "targets": [
+        {
+          "expr": "(sum(hikaricp_connections_active{application=~\"$application\"}) / sum(hikaricp_connections_max{application=~\"$application\"})) * 100 or vector(0)",
+          "legendFormat": "Pool Saturation"
+        }
+      ],
+      "title": "HikariCP Pool Saturation %",
+      "type": "gauge"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "fillOpacity": 15 },
+          "unit": "none"
+        }
+      },
+      "gridPos": { "h": 8, "w": 10, "x": 6, "y": 18 },
+      "id": 6,
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom" }
+      },
+      "targets": [
+        { "expr": "sum(hikaricp_connections_active{application=~\"$application\"}) by (pool, application)", "legendFormat": "Active (Đang thực thi) - {{pool}}" },
+        { "expr": "sum(hikaricp_connections_pending{application=~\"$application\"}) by (pool, application)", "legendFormat": "Pending Queue (Đang xếp hàng chờ kết nối) - {{pool}}" },
+        { "expr": "sum(hikaricp_connections_idle{application=~\"$application\"}) by (pool, application)", "legendFormat": "Idle (Rảnh rỗi) - {{pool}}" }
+      ],
+      "title": "HikariCP Connections: Active vs Pending Queue vs Idle",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "fillOpacity": 15 },
+          "unit": "none"
+        }
+      },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 18 },
+      "id": 7,
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom" }
+      },
+      "targets": [
+        { "expr": "pg_stat_activity_count{state=\"active\"}", "legendFormat": "Postgres Active Connections" },
+        { "expr": "pg_stat_activity_count{state=\"idle\"}", "legendFormat": "Postgres Idle Connections" },
+        { "expr": "pg_stat_activity_count{state=\"idle in transaction\"}", "legendFormat": "Idle in Transaction (Nguy hiểm)" }
+      ],
+      "title": "PostgreSQL Active Connections to Database",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 26 },
+      "id": 300,
+      "title": "TẦNG 3: JVM RUNTIME, GC PAUSES & THREADS",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "fillOpacity": 20 },
+          "unit": "bytes"
+        }
+      },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 27 },
+      "id": 8,
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom" }
+      },
+      "targets": [
+        { "expr": "jvm_memory_used_bytes{application=~\"$application\", area=\"heap\"}", "legendFormat": "Heap Memory Used - {{application}}" },
+        { "expr": "jvm_memory_committed_bytes{application=~\"$application\", area=\"heap\"}", "legendFormat": "Heap Committed - {{application}}" },
+        { "expr": "jvm_memory_max_bytes{application=~\"$application\", area=\"heap\"}", "legendFormat": "Heap Memory Max - {{application}}" }
+      ],
+      "title": "JVM Heap Memory Usage",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "fillOpacity": 15 },
+          "unit": "s"
+        }
+      },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 27 },
+      "id": 9,
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom" }
+      },
+      "targets": [
+        { "expr": "sum(increase(jvm_gc_pause_seconds_sum{application=~\"$application\"}[1m])) by (action, cause)", "legendFormat": "GC Pause Sum (1m) - {{cause}}" },
+        { "expr": "max(jvm_gc_pause_seconds_max{application=~\"$application\"}) by (action)", "legendFormat": "GC Pause Max - {{action}}" }
+      ],
+      "title": "JVM GC Pause Time (Độ trễ Dừng Garbage Collection)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "fillOpacity": 15 },
+          "unit": "none"
+        }
+      },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 27 },
+      "id": 10,
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom" }
+      },
+      "targets": [
+        { "expr": "tomcat_threads_busy_threads{application=~\"$application\"} or jvm_threads_live_threads{application=~\"$application\"}", "legendFormat": "Busy / Live Threads - {{application}}" },
+        { "expr": "tomcat_threads_current_threads{application=~\"$application\"} or jvm_threads_peak_threads{application=~\"$application\"}", "legendFormat": "Current / Peak Threads - {{application}}" }
+      ],
+      "title": "Tomcat Threads / JVM Threads (Busy vs Max)",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 35 },
+      "id": 400,
+      "title": "TẦNG 4: REDIS CACHE & TẢI PHẦN CỨNG HỆ THỐNG",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "fillOpacity": 15 },
+          "unit": "ops"
+        }
+      },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 36 },
+      "id": 11,
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom" }
+      },
+      "targets": [
+        { "expr": "rate(redis_commands_processed_total[1m])", "legendFormat": "Commands Processed / sec" },
+        { "expr": "redis_memory_used_bytes", "legendFormat": "Redis Used Memory" }
+      ],
+      "title": "Redis Cache Commands Throughput & Memory",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "max": 100,
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "#EAB839", "value": 75 },
+              { "color": "red", "value": 90 }
+            ]
+          },
+          "unit": "percent"
+        }
+      },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 36 },
+      "id": 12,
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom" }
+      },
+      "targets": [
+        { "expr": "100 - (avg(irate(node_cpu_seconds_total{mode=\"idle\"}[1m])) * 100)", "legendFormat": "Total CPU load %" }
+      ],
+      "title": "HOST CPU UTILIZATION (%)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "max": 100,
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "#EAB839", "value": 80 },
+              { "color": "red", "value": 90 }
+            ]
+          },
+          "unit": "percent"
+        }
+      },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 36 },
+      "id": 13,
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom" }
+      },
+      "targets": [
+        { "expr": "(1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100", "legendFormat": "RAM Usage %" }
+      ],
+      "title": "HOST OS RAM UTILIZATION (%)",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 44 },
+      "id": 500,
+      "title": "TẦNG 5: HÀNG ĐỢI XỬ LÝ BÁO CÁO (QUEUE WORKER & RABBITMQ OBSERVABILITY)",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "fillOpacity": 25, "lineWidth": 2 },
+          "unit": "ops"
+        }
+      },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 45 },
+      "id": 14,
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["sum", "mean", "max"] }
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(erp_queue_jobs_total[1m])) by (status, module)",
+          "legendFormat": "{{status}} - Module: {{module}}"
+        }
+      ],
+      "title": "Queue Job Processing Throughput (Jobs/sec by Status & Module)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "fillOpacity": 20, "lineWidth": 2 },
+          "unit": "s"
+        }
+      },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 45 },
+      "id": 15,
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["mean", "max"] }
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum(rate(erp_queue_job_duration_seconds_bucket[1m])) by (le, module))",
+          "legendFormat": "P50 Latency - {{module}}"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(erp_queue_job_duration_seconds_bucket[1m])) by (le, module))",
+          "legendFormat": "P95 Latency - {{module}}"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum(rate(erp_queue_job_duration_seconds_bucket[1m])) by (le, module))",
+          "legendFormat": "P99 Latency - {{module}}"
+        }
+      ],
+      "title": "Queue Job Execution Duration (Độ trễ Kết xuất P50, P95, P99)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "max": 10,
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "#EAB839", "value": 4 },
+              { "color": "red", "value": 8 }
+            ]
+          },
+          "unit": "none"
+        }
+      },
+      "gridPos": { "h": 8, "w": 4, "x": 16, "y": 45 },
+      "id": 16,
+      "options": {
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "showThresholdMarkers": true
+      },
+      "targets": [
+        { "expr": "erp_queue_active_jobs", "legendFormat": "Active In-Flight Jobs" }
+      ],
+      "title": "Active Jobs In-Flight",
+      "type": "gauge"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "max": 100,
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "#EAB839", "value": 90 },
+              { "color": "green", "value": 98 }
+            ]
+          },
+          "unit": "percent"
+        }
+      },
+      "gridPos": { "h": 8, "w": 4, "x": 20, "y": 45 },
+      "id": 17,
+      "options": {
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "showThresholdMarkers": true
+      },
+      "targets": [
+        {
+          "expr": "(sum(rate(erp_queue_jobs_total{status=\"SUCCESS\"}[5m])) or vector(0)) / (sum(rate(erp_queue_jobs_total[5m])) > 0) * 100 or vector(100)",
+          "legendFormat": "Success Rate"
+        }
+      ],
+      "title": "Tỷ lệ Thành công (%)",
+      "type": "gauge"
+    }
+  ],
+  "refresh": "5s",
+  "schemaVersion": 38,
+  "style": "dark",
+  "tags": ["erp-utt", "spring-boot", "production", "queue-service", "backend-service"],
+  "templating": {
+    "list": [
+      {
+        "allValue": ".*",
+        "current": {
+          "selected": true,
+          "text": "All",
+          "value": "$__all"
+        },
+        "datasource": {
+          "type": "prometheus",
+          "uid": "Prometheus"
+        },
+        "definition": "label_values(jvm_memory_used_bytes, application)",
+        "hide": 0,
+        "includeAll": true,
+        "label": "Application",
+        "multi": true,
+        "name": "application",
+        "options": [],
+        "query": {
+          "query": "label_values(jvm_memory_used_bytes, application)",
+          "refId": "StandardVariableQuery"
+        },
+        "refresh": 1,
+        "regex": "",
+        "skipUrlSync": false,
+        "sort": 1,
+        "type": "query"
+      }
+    ]
+  },
+  "time": {
+    "from": "now-30m",
+    "to": "now"
+  },
+  "timepicker": {
+    "refresh_intervals": ["5s", "10s", "30s", "1m", "5m"]
+  },
+  "timezone": "browser",
+  "title": "ERP UTT - Enterprise Observability & Stress Testing Dashboard",
+  "uid": "9f5c9ad2-111e-5e8d-83ec-9feba30cf07e",
+  "version": 2
+}

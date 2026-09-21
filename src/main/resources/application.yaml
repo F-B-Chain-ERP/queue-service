@@ -61,3 +61,13 @@ management:
   endpoint:
     health:
       show-details: always
+      probes:
+        enabled: true
+    prometheus:
+      enabled: true
+  metrics:
+    tags:
+      application: ${spring.application.name:queue-service}
+    distribution:
+      percentiles-histogram:
+        http.server.requests: true
