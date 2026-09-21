@@ -1,0 +1,51 @@
+services:
+  queue-service:
+    image: ${IMAGE_NAME:-erp-queue}:${IMAGE_TAG:-latest}
+    container_name: erp-queue
+    restart: unless-stopped
+    environment:
+      # Profile
+      - SPRING_PROFILES_ACTIVE=${SPRING_PROFILES_ACTIVE:-dev}
+      - SERVER_PORT=8090
+
+      # Database PostgreSQL
+      - DB_URL=jdbc:postgresql://${DB_HOST:-postgresql}:${DB_PORT:-5432}/${DB_NAME:-erp_dev}
+      - DB_USERNAME=${DB_USERNAME:-erp_user}
+      - DB_PASSWORD=${DB_PASSWORD:-erp123456@}
+
+      # Redis Cache & Lock
+      - REDIS_HOST=${REDIS_HOST:-redis}
+      - REDIS_PORT=${REDIS_PORT:-6379}
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-erp_redis_2026}
+
+      # RabbitMQ Message Broker
+      - RABBITMQ_HOST=${RABBITMQ_HOST:-rabbitmq}
+      - RABBITMQ_PORT=${RABBITMQ_PORT:-5672}
+      - RABBITMQ_USER=${RABBITMQ_USER:-erp_rabbit}
+      - RABBITMQ_PASS=${RABBITMQ_PASS:-erp123456@}
+      - RABBITMQ_VHOST=${RABBITMQ_VHOST:-erp_vhost}
+
+      # MinIO Object Storage
+      - MINIO_ENDPOINT=${MINIO_ENDPOINT:-http://minio:9000}
+      - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY:-erp_minio}
+      - MINIO_SECRET_KEY=${MINIO_SECRET_KEY:-erp123456@}
+      - MINIO_REPORT_BUCKET=${MINIO_REPORT_BUCKET:-erp-reports}
+      - MINIO_PUBLIC_URL=${MINIO_PUBLIC_URL:-/storage}
+
+      # Report settings
+      - JAVA_OPTS=-Xms256m -Xmx512m -XX:+UseG1GC
+    ports:
+      - "127.0.0.1:8090:8090"
+    networks:
+      - erp-network
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:8090/actuator/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 8
+      start_period: 40s
+
+networks:
+  erp-network:
+    name: ${ERP_NETWORK:-backend-service_default}
+    external: true

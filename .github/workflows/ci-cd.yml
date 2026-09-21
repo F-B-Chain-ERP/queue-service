@@ -1,0 +1,321 @@
+name: Queue Service CI/CD Pipeline
+
+on:
+  push:
+    branches:
+      - dev
+  pull_request:
+    branches:
+      - dev
+  workflow_dispatch:
+    inputs:
+      deploy_to_server:
+        description: 'Triển khai lên server sau khi build?'
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: erp-queue
+
+jobs:
+  # ----------------------------------------------------------------------------
+  # JOB 1: Fast Build Validation
+  # ----------------------------------------------------------------------------
+  validate:
+    name: ⚡ Fast Build Validation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout queue-service
+        uses: actions/checkout@v4
+        with:
+          path: queue-service
+
+      - name: Checkout core-model
+        id: checkout-core-model
+        uses: actions/checkout@v4
+        with:
+          repository: F-B-Chain-ERP/core-model
+          ref: dev
+          token: ${{ secrets.GH_PAT || github.token }}
+          path: core-model
+        continue-on-error: true
+
+      - name: Checkout core-model (fallback default branch)
+        if: steps.checkout-core-model.outcome == 'failure'
+        uses: actions/checkout@v4
+        with:
+          repository: F-B-Chain-ERP/core-model
+          token: ${{ secrets.GH_PAT || github.token }}
+          path: core-model
+
+      - name: Set up Java 21 (Temurin)
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+          cache: 'maven'
+          cache-dependency-path: |
+            core-model/pom.xml
+            queue-service/pom.xml
+
+      - name: Build & Install core-model
+        run: |
+          chmod +x queue-service/mvnw
+          cd core-model
+          ../queue-service/mvnw clean install -DskipTests
+
+      - name: Compile queue-service
+        run: |
+          cd queue-service
+          ./mvnw clean compile -DskipTests -Dcheckstyle.skip=true
+
+  # ----------------------------------------------------------------------------
+  # JOB 2: Build Multi-Stage Docker Image & Push to GHCR
+  # ----------------------------------------------------------------------------
+  build-and-push:
+    name: 🐳 Docker Build & Push to GHCR
+    needs: validate
+    if: (github.event_name == 'push' && github.ref == 'refs/heads/dev') || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    outputs:
+      short_sha: ${{ steps.vars.outputs.short_sha }}
+      image_ref: ${{ steps.vars.outputs.image_ref }}
+    steps:
+      - name: Set short git SHA & image vars
+        id: vars
+        run: |
+          SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
+          LOWER_REPO=$(echo "${{ github.repository_owner }}/${{ env.IMAGE_NAME }}" | tr '[:upper:]' '[:lower:]')
+          echo "short_sha=${SHORT_SHA}" >> $GITHUB_OUTPUT
+          echo "image_ref=${{ env.REGISTRY }}/${LOWER_REPO}" >> $GITHUB_OUTPUT
+
+      - name: Checkout queue-service
+        uses: actions/checkout@v4
+        with:
+          path: queue-service
+
+      - name: Checkout core-model
+        id: checkout-core-model
+        uses: actions/checkout@v4
+        with:
+          repository: F-B-Chain-ERP/core-model
+          ref: dev
+          token: ${{ secrets.GH_PAT || github.token }}
+          path: core-model
+        continue-on-error: true
+
+      - name: Checkout core-model (fallback default branch)
+        if: steps.checkout-core-model.outcome == 'failure'
+        uses: actions/checkout@v4
+        with:
+          repository: F-B-Chain-ERP/core-model
+          token: ${{ secrets.GH_PAT || github.token }}
+          path: core-model
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Docker Meta (Generate tags)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ steps.vars.outputs.image_ref }}
+          tags: |
+            type=raw,value=dev
+            type=raw,value=sha-${{ steps.vars.outputs.short_sha }}
+            type=raw,value=latest
+
+      - name: Build & Push Docker Image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./queue-service/Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ----------------------------------------------------------------------------
+  # JOB 3: Continuous Deployment & Automated Health Check / Rollback
+  # ----------------------------------------------------------------------------
+  deploy:
+    name: 🚀 Deploy to Server & Health Check
+    needs: build-and-push
+    if: |
+      ((github.event_name == 'push' && github.ref == 'refs/heads/dev') || github.event_name == 'workflow_dispatch') &&
+      (github.event.inputs.deploy_to_server != 'false')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy on Remote Server via SSH
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER || 'devops' }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: ${{ secrets.SSH_PORT || 22 }}
+          script_stop: true
+          script: |
+            set -e
+            TARGET_IMAGE="${{ needs.build-and-push.outputs.image_ref }}"
+            TARGET_TAG="sha-${{ needs.build-and-push.outputs.short_sha }}"
+
+            echo "=========================================================="
+            echo "  SSH DEPLOY TRIGGERED FROM GITHUB ACTIONS"
+            echo "  Target: ${TARGET_IMAGE}:${TARGET_TAG}"
+            echo "=========================================================="
+
+            REPO_URL="https://x-access-token:${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}@github.com/F-B-Chain-ERP/queue-service.git"
+
+            # Xác định thư mục queue-service trên server
+            if [ -d "${HOME}/queue-service" ]; then
+              APP_DIR="${HOME}/queue-service"
+            elif [ -d "/opt/ERP-UTT/queue-service" ]; then
+              APP_DIR="/opt/ERP-UTT/queue-service"
+            else
+              APP_DIR="${HOME}/queue-service"
+              mkdir -p "${APP_DIR}"
+            fi
+
+            echo "▶ Server Working Directory: ${APP_DIR}"
+            cd "${APP_DIR}"
+
+            # Nếu thư mục chưa khởi tạo git repo -> clone về
+            if [ ! -d ".git" ]; then
+              echo "▶ Clone queue-service về server..."
+              git clone -b dev "${REPO_URL}" .
+            fi
+
+            # Đồng bộ các scripts và cấu hình compose mới nhất từ nhánh dev
+            echo "▶ Đồng bộ source files mới nhất..."
+            git remote set-url origin "${REPO_URL}"
+            git fetch origin dev
+            git reset --hard HEAD || true
+            git checkout -f dev
+            git reset --hard origin/dev
+            git clean -fd
+
+            # Cấp quyền thực thi cho các scripts
+            chmod +x deploy/scripts/*.sh
+
+            # Đăng nhập GHCR trên server để pull image
+            echo "▶ Xác thực GitHub Container Registry..."
+            echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+            # Chạy deploy script với cơ chế tự động rollback
+            bash deploy/scripts/deploy.sh "${TARGET_IMAGE}" "${TARGET_TAG}"
+
+  # ----------------------------------------------------------------------------
+  # JOB 4: Gửi thông báo kết quả CI/CD lên Discord (Tùy chọn)
+  # ----------------------------------------------------------------------------
+  notify:
+    name: 📢 Discord Notification
+    needs: [validate, build-and-push, deploy]
+    if: always() && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send Discord Notification
+        if: env.DISCORD_WEBHOOK != ''
+        env:
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+          VALIDATE_RES: ${{ needs.validate.result }}
+          BUILD_RES: ${{ needs.build-and-push.result }}
+          DEPLOY_RES: ${{ needs.deploy.result }}
+          BRANCH: ${{ github.ref_name }}
+          ACTOR: ${{ github.actor }}
+          COMMIT_SHA: ${{ github.sha }}
+          COMMIT_MSG: ${{ github.event.head_commit.message || 'Manual trigger' }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_NUMBER: ${{ github.run_number }}
+          REPO: ${{ github.repository }}
+          SERVER_URL: ${{ github.server_url }}
+          IMAGE_REF: ${{ needs.build-and-push.outputs.image_ref }}:sha-${{ needs.build-and-push.outputs.short_sha }}
+        run: |
+          python3 - << 'EOF'
+          import os, json, urllib.request, datetime
+
+          webhook_url = os.environ.get("DISCORD_WEBHOOK", "").strip()
+          if not webhook_url:
+              print("No DISCORD_WEBHOOK secret configured. Skipping Discord notification.")
+              exit(0)
+
+          val_res = os.environ.get("VALIDATE_RES", "skipped")
+          build_res = os.environ.get("BUILD_RES", "skipped")
+          deploy_res = os.environ.get("DEPLOY_RES", "skipped")
+
+          is_success = (val_res == "success" and build_res == "success" and deploy_res == "success")
+          color = 3066993 if is_success else 15158332 # Green or Red
+
+          status_icon = {
+              "success": "✅ Success",
+              "failure": "❌ Failed",
+              "cancelled": "⚠️ Cancelled",
+              "skipped": "⚪ Skipped"
+          }
+
+          title = "🚀 [Queue Service] CI/CD Deploy THÀNH CÔNG!" if is_success else "❌ [Queue Service] CI/CD THẤT BẠI!"
+          run_url = f"{os.environ.get('SERVER_URL')}/{os.environ.get('REPO')}/actions/runs/{os.environ.get('RUN_ID')}"
+          short_sha = os.environ.get("COMMIT_SHA", "")[:7]
+          commit_msg = os.environ.get("COMMIT_MSG", "").split('\n')[0][:120]
+
+          fields = [
+              {"name": "🌿 Branch", "value": f"`{os.environ.get('BRANCH')}`", "inline": True},
+              {"name": "👤 Người thực hiện", "value": f"@{os.environ.get('ACTOR')}", "inline": True},
+              {"name": "🔖 Commit", "value": f"[`{short_sha}`]({os.environ.get('SERVER_URL')}/{os.environ.get('REPO')}/commit/{os.environ.get('COMMIT_SHA')}): {commit_msg}", "inline": False},
+              {
+                  "name": "📋 Trạng thái các bước",
+                  "value": (
+                      f"• **1. Fast Validation**: {status_icon.get(val_res, val_res)}\n"
+                      f"• **2. Docker Build & Push**: {status_icon.get(build_res, build_res)}\n"
+                      f"• **3. SSH Deploy & Health Check**: {status_icon.get(deploy_res, deploy_res)}"
+                  ),
+                  "inline": False
+              },
+              {"name": "🖥️ Server", "value": "`163.61.72.183`", "inline": True},
+              {"name": "📦 Image Tag", "value": f"`{os.environ.get('IMAGE_REF')}`" if is_success else "`N/A`", "inline": True}
+          ]
+
+          payload = {
+              "username": "ERP GitHub Actions Bot",
+              "avatar_url": "https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png",
+              "embeds": [
+                  {
+                      "title": title,
+                      "url": run_url,
+                      "color": color,
+                      "description": f"Workflow run: [#{os.environ.get('RUN_NUMBER')}]({run_url})",
+                      "fields": fields,
+                      "footer": {"text": "ERP UTT CI/CD System • vm08181524"},
+                      "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat()
+                  }
+              ]
+          }
+
+          req = urllib.request.Request(
+              webhook_url,
+              data=json.dumps(payload).encode("utf-8"),
+              headers={
+                  "Content-Type": "application/json",
+                  "User-Agent": "GitHubActions-Discord-Notifier"
+              }
+          )
+
+          try:
+              with urllib.request.urlopen(req) as resp:
+                  print(f"Discord notification sent successfully! HTTP Status: {resp.status}")
+          except Exception as e:
+              print(f"Failed to send Discord notification: {e}")
+          EOF

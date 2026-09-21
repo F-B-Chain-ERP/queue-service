@@ -14,7 +14,7 @@ spring:
       password: ${REDIS_PASSWORD:erp_redis_2026}
       timeout: 3000ms
   rabbitmq:
-    host: ${RABBITMQ_HOST:localhost}
+    host: ${RABBITMQ_HOST:163.61.72.183}
     port: ${RABBITMQ_PORT:5672}
     username: ${RABBITMQ_USER:erp_rabbit}
     password: ${RABBITMQ_PASS:erp123456@}
