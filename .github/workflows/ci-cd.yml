@@ -162,14 +162,17 @@ jobs:
     steps:
       - name: Deploy on Remote Server via SSH
         uses: appleboy/ssh-action@v1.2.0
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT != '' && secrets.GH_PAT || github.token }}
         with:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER || 'devops' }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           port: ${{ secrets.SSH_PORT || 22 }}
+          envs: GH_TOKEN
           script_stop: true
           script: |
-            set -e
+            set -ex
             TARGET_IMAGE="${{ needs.build-and-push.outputs.image_ref }}"
             TARGET_TAG="sha-${{ needs.build-and-push.outputs.short_sha }}"
 
@@ -178,34 +181,39 @@ jobs:
             echo "  Target: ${TARGET_IMAGE}:${TARGET_TAG}"
             echo "=========================================================="
 
-            REPO_URL="https://x-access-token:${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}@github.com/F-B-Chain-ERP/queue-service.git"
+            REPO_URL="https://x-access-token:${GH_TOKEN}@github.com/F-B-Chain-ERP/queue-service.git"
 
             # Xác định thư mục queue-service trên server
-            if [ -d "${HOME}/queue-service" ]; then
-              APP_DIR="${HOME}/queue-service"
+            CURRENT_USER=$(whoami)
+            USER_HOME="${HOME:-/home/${CURRENT_USER}}"
+
+            if [ -d "${USER_HOME}/queue-service" ]; then
+              APP_DIR="${USER_HOME}/queue-service"
             elif [ -d "/opt/ERP-UTT/queue-service" ]; then
               APP_DIR="/opt/ERP-UTT/queue-service"
             else
-              APP_DIR="${HOME}/queue-service"
+              APP_DIR="${USER_HOME}/queue-service"
               mkdir -p "${APP_DIR}"
             fi
 
             echo "▶ Server Working Directory: ${APP_DIR}"
             cd "${APP_DIR}"
 
+            # Cấu hình an toàn cho thư mục git trên server
+            git config --global --add safe.directory "${APP_DIR}" || true
+
             # Nếu thư mục chưa khởi tạo git repo -> clone về
             if [ ! -d ".git" ]; then
               echo "▶ Clone queue-service về server..."
-              git clone -b dev "${REPO_URL}" .
+              git clone -b dev "${REPO_URL}" . || git clone "${REPO_URL}" .
             fi
 
             # Đồng bộ các scripts và cấu hình compose mới nhất từ nhánh dev
             echo "▶ Đồng bộ source files mới nhất..."
             git remote set-url origin "${REPO_URL}"
-            git fetch origin dev
-            git reset --hard HEAD || true
-            git checkout -f dev
-            git reset --hard origin/dev
+            git fetch origin dev || git fetch origin
+            git checkout -f dev || git checkout -f -b dev origin/dev || true
+            git reset --hard origin/dev || true
             git clean -fd
 
             # Cấp quyền thực thi cho các scripts
@@ -213,7 +221,7 @@ jobs:
 
             # Đăng nhập GHCR trên server để pull image
             echo "▶ Xác thực GitHub Container Registry..."
-            echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+            echo "${GH_TOKEN}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
 
             # Chạy deploy script với cơ chế tự động rollback
             bash deploy/scripts/deploy.sh "${TARGET_IMAGE}" "${TARGET_TAG}"
