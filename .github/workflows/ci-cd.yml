@@ -187,6 +187,8 @@ jobs:
             CURRENT_USER=$(whoami)
             USER_HOME="${HOME:-/home/${CURRENT_USER}}"
 
+            # Tạm tắt set -e để kiểm tra sự tồn tại thư mục không làm abort script
+            set +e
             if [ -d "${USER_HOME}/queue-service" ]; then
               APP_DIR="${USER_HOME}/queue-service"
             elif [ -d "/opt/ERP-UTT/queue-service" ]; then
@@ -195,6 +197,7 @@ jobs:
               APP_DIR="${USER_HOME}/queue-service"
               mkdir -p "${APP_DIR}"
             fi
+            set -e
 
             echo "▶ Server Working Directory: ${APP_DIR}"
             cd "${APP_DIR}"
