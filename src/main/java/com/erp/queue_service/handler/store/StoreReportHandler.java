@@ -189,6 +189,9 @@ public class StoreReportHandler implements ModuleReportHandler {
         Map<String, Object> params = message.getParams() != null ? message.getParams() : Collections.emptyMap();
         UUID branchId = message.getBranchId();
 
+        String shiftReportIdStr = (String) params.get("shiftReportId");
+        UUID shiftReportId = (shiftReportIdStr != null && !shiftReportIdStr.isBlank())
+                ? UUID.fromString(shiftReportIdStr) : null;
         String businessDateStr = (String) params.get("businessDate");
         String startDateStr = (String) params.get("startDate");
         String endDateStr = (String) params.get("endDate");
@@ -200,6 +203,9 @@ public class StoreReportHandler implements ModuleReportHandler {
 
         Specification<ShiftReport> spec = (root, query, cb) -> {
             var predicates = cb.conjunction();
+            if (shiftReportId != null) {
+                predicates = cb.and(predicates, cb.equal(root.get("id"), shiftReportId));
+            }
             if (branchId != null) {
                 predicates = cb.and(predicates, cb.equal(root.get("branchId"), branchId));
             }

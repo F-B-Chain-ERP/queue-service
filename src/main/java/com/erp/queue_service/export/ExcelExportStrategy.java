@@ -117,6 +117,15 @@ public class ExcelExportStrategy implements ExportStrategy {
             writeSummaryRow(sheet, s, columns, summary, rowIndex++);
         }
 
+        // Freeze panes dưới header để khi cuộn trang tiêu đề vẫn cố định
+        sheet.createFreezePane(0, headerRowIndex + 1);
+
+        // Auto-filter trên dải cột dữ liệu
+        if (!rows.isEmpty()) {
+            int lastDataRow = (context.summary() instanceof Map<?, ?>) ? rowIndex - 2 : rowIndex - 1;
+            sheet.setAutoFilter(new CellRangeAddress(headerRowIndex, lastDataRow, 0, colCount - 1));
+        }
+
         for (int col = 0; col < columns.size(); col++) {
             int userWidth = columns.get(col).width();
             if (userWidth > 0) {

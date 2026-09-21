@@ -47,6 +47,31 @@ public class PdfExportStrategy implements ExportStrategy {
     @Value("${app.report.logo-path:}")
     private String configuredLogoPath;
 
+    private final BaseFont regularBaseFont;
+    private final BaseFont boldBaseFont;
+    private final BaseFont italicBaseFont;
+
+    public PdfExportStrategy() {
+        this.regularBaseFont = loadBaseFont("/font/NotoSans-Regular.ttf", "NotoSans-Regular.ttf");
+        this.boldBaseFont = loadBaseFont("/font/NotoSans-Bold.ttf", "NotoSans-Bold.ttf");
+        this.italicBaseFont = loadBaseFont("/font/NotoSans-Italic.ttf", "NotoSans-Italic.ttf");
+    }
+
+    private static BaseFont loadBaseFont(String resourcePath, String name) {
+        try (var is = PdfExportStrategy.class.getResourceAsStream(resourcePath)) {
+            if (is != null) {
+                byte[] fontBytes = is.readAllBytes();
+                return BaseFont.createFont(name, BaseFont.IDENTITY_H, BaseFont.EMBEDDED, true, fontBytes, null);
+            }
+        } catch (Exception ignored) {
+        }
+        try {
+            return BaseFont.createFont(BaseFont.HELVETICA, BaseFont.CP1252, BaseFont.NOT_EMBEDDED);
+        } catch (Exception e) {
+            throw new RuntimeException("Lỗi tạo font dự phòng: " + e.getMessage(), e);
+        }
+    }
+
     @Override
     public ExportFormat getSupportedFormat() {
         return ExportFormat.PDF;
@@ -69,11 +94,11 @@ public class PdfExportStrategy implements ExportStrategy {
             PdfWriter.getInstance(document, out);
             document.open();
 
-            Font titleFont = FontFactory.getFont(FontFactory.HELVETICA_BOLD, 15, BRAND_COLOR);
-            Font subFont = FontFactory.getFont(FontFactory.HELVETICA_OBLIQUE, 9, Color.GRAY);
-            Font headerFont = FontFactory.getFont(FontFactory.HELVETICA_BOLD, 9, Color.WHITE);
-            Font cellFont = FontFactory.getFont(FontFactory.HELVETICA, 8, Color.DARK_GRAY);
-            Font boldCellFont = FontFactory.getFont(FontFactory.HELVETICA_BOLD, 8, Color.DARK_GRAY);
+            Font titleFont = new Font(boldBaseFont, 15, Font.NORMAL, BRAND_COLOR);
+            Font subFont = new Font(italicBaseFont, 9, Font.NORMAL, Color.GRAY);
+            Font headerFont = new Font(boldBaseFont, 9, Font.NORMAL, Color.WHITE);
+            Font cellFont = new Font(regularBaseFont, 8, Font.NORMAL, Color.DARK_GRAY);
+            Font boldCellFont = new Font(boldBaseFont, 8, Font.NORMAL, Color.DARK_GRAY);
 
             byte[] logo = ReportLogoResolver.resolve(configuredLogoPath, context.logoPath());
             if (logo != null) {
