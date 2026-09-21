@@ -7,8 +7,14 @@ spring:
     username: ${DB_USERNAME:erp_user}
     password: ${DB_PASSWORD:erp123456@}
     driver-class-name: org.postgresql.Driver
+  data:
+    redis:
+      host: ${REDIS_HOST:163.61.72.183}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:erp_redis_2026}
+      timeout: 3000ms
   rabbitmq:
-    host: ${RABBITMQ_HOST:localhost}
+    host: ${RABBITMQ_HOST:163.61.72.183}
     port: ${RABBITMQ_PORT:5672}
     username: ${RABBITMQ_USER:erp_rabbit}
     password: ${RABBITMQ_PASS:erp123456@}

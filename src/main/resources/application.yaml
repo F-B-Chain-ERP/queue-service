@@ -26,14 +26,23 @@ spring:
         prefetch: 1
         concurrency: 2
         max-concurrency: 5
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+      timeout: 3000ms
 
 app:
   minio:
     endpoint: ${MINIO_ENDPOINT:http://localhost:9000}
     access-key: ${MINIO_ACCESS_KEY:erp_minio}
     secret-key: ${MINIO_SECRET_KEY:erp123456@}
-    bucket-name: ${MINIO_REPORT_BUCKET:erp-reports}
+    bucket-name: ${MINIO_REPORT_BUCKET:${MINIO_BUCKET_NAME:erp-reports}}
     public-url: ${MINIO_PUBLIC_URL:/storage}
+  report:
+    minio-bucket-name: ${MINIO_REPORT_BUCKET:erp-reports}
+    logo-path: ${REPORT_LOGO_PATH:classpath:/report/logo-erp.png}
   rabbitmq:
     report:
       exchange: ${RABBITMQ_REPORT_EXCHANGE:erp.report.exchange}

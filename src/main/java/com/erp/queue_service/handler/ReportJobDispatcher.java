@@ -1,23 +1,22 @@
 package com.erp.queue_service.handler;
 
-import com.erp.core.domain.ReportJob;
 import com.erp.core.enums.ExportFormat;
-import com.erp.core.enums.ReportStatus;
 import com.erp.queue_service.export.ExportStrategy;
 import com.erp.queue_service.export.ExportStrategyFactory;
-import com.erp.queue_service.export.ReportDataContext;
+import com.erp.core.report.ReportDataContext;
 import com.erp.queue_service.messaging.ReportMessage;
-import com.erp.queue_service.repository.ReportJobRepository;
+import com.erp.queue_service.notification.ReportSseNotifier;
 import com.erp.queue_service.service.MinioStorageService;
+import com.erp.queue_service.service.ReportJobStateService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
 import org.springframework.stereotype.Component;
-import org.springframework.transaction.annotation.Transactional;
 
-import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
+import java.util.UUID;
 
 /**
  * Bộ điều phối trung tâm tiếp nhận Message từ RabbitMQ, định tuyến đến Handler tương ứng,
@@ -32,73 +31,95 @@ public class ReportJobDispatcher {
     private final List<ModuleReportHandler> handlers;
     private final ExportStrategyFactory strategyFactory;
     private final MinioStorageService minioStorageService;
-    private final ReportJobRepository reportJobRepository;
+    private final ReportJobStateService reportJobStateService;
+    private final ReportSseNotifier reportSseNotifier;
 
     public ReportJobDispatcher(List<ModuleReportHandler> handlers,
                                ExportStrategyFactory strategyFactory,
                                MinioStorageService minioStorageService,
-                               ReportJobRepository reportJobRepository) {
+                               ReportJobStateService reportJobStateService,
+                               ReportSseNotifier reportSseNotifier) {
         this.handlers = handlers;
         this.strategyFactory = strategyFactory;
         this.minioStorageService = minioStorageService;
-        this.reportJobRepository = reportJobRepository;
+        this.reportJobStateService = reportJobStateService;
+        this.reportSseNotifier = reportSseNotifier;
     }
 
     /**
      * Điều phối và xử lý trọn vẹn tác vụ báo cáo bất đồng bộ.
+     * Lưu ý: Không đặt @Transactional ở cấp phương thức này để không giữ kết nối DB
+     * trong suốt quá trình truy vấn nặng và upload file MinIO.
      */
-    @Transactional
     public void dispatch(ReportMessage message) {
-        log.info("[Dispatcher] Bắt đầu xử lý ReportJob ID: {}, Module: {}, Type: {}",
-                message.getJobId(), message.getModule(), message.getReportType());
-
-        // 1. Cập nhật trạng thái tác vụ sang PROCESSING
-        ReportJob job = reportJobRepository.findById(message.getJobId()).orElse(null);
-        if (job == null) {
-            log.warn("[Dispatcher] Không tìm thấy ReportJob ID: {}", message.getJobId());
-            return;
-        }
-
-        job.setStatus(ReportStatus.PROCESSING.name());
-        job.setStartedAt(Instant.now());
-        reportJobRepository.save(job);
-
+        UUID jobId = message.getJobId();
         try {
-            // 2. Tìm Handler tương ứng với module
-            ModuleReportHandler handler = handlers.stream()
-                    .filter(h -> h.supports(message.getModule()))
-                    .findFirst()
-                    .orElseThrow(() -> new IllegalArgumentException("Không tìm thấy handler cho module: " + message.getModule()));
+            MDC.put("jobId", jobId != null ? jobId.toString() : "UNKNOWN");
+            MDC.put("module", message.getModule() != null ? message.getModule() : "");
+            MDC.put("reportType", message.getReportType() != null ? message.getReportType() : "");
 
-            // 3. Trích xuất dữ liệu báo cáo
-            ReportDataContext context = handler.generateReportData(message);
+            log.info("[Dispatcher] Bắt đầu xử lý ReportJob ID: {}, Module: {}, Type: {}",
+                    jobId, message.getModule(), message.getReportType());
 
-            // 4. Kết xuất ra file theo định dạng (Excel / PDF)
-            ExportFormat format = ExportFormat.valueOf(message.getFormat() != null ? message.getFormat() : "EXCEL");
-            ExportStrategy strategy = strategyFactory.getStrategy(format);
-            byte[] fileBytes = strategy.export(context);
+            // 1. Conditional Claim Job (Transaction riêng)
+            boolean claimed = reportJobStateService.claimJob(jobId);
+            if (!claimed) {
+                log.warn("[Dispatcher] Không thể claim ReportJob ID: {} (Job đã được claim, hoàn tất, hoặc đã bị CANCELLED). Bỏ qua xử lý.", jobId);
+                return;
+            }
 
-            // 5. Tải file lên MinIO
-            String timestamp = LocalDateTime.now().format(FILE_DATE_FORMAT);
-            String baseName = handler.getBaseFileName(message);
-            String originalFileName = baseName + "_" + timestamp + strategy.getFileExtension();
-            String fileUrl = minioStorageService.uploadReport(fileBytes, originalFileName, strategy.getContentType());
+            try {
+                // 2. Tìm Handler tương ứng với module
+                ModuleReportHandler handler = handlers.stream()
+                        .filter(h -> h.supports(message.getModule()))
+                        .findFirst()
+                        .orElseThrow(() -> new IllegalArgumentException("Không tìm thấy handler cho module: " + message.getModule()));
 
-            // 6. Cập nhật ReportJob sang DONE
-            job.setStatus(ReportStatus.DONE.name());
-            job.setFileUrl(fileUrl);
-            job.setCompletedAt(Instant.now());
-            reportJobRepository.save(job);
+                // 3. Trích xuất dữ liệu báo cáo (chạy ngoài transaction DB dài)
+                ReportDataContext context = handler.generateReportData(message);
 
-            log.info("[Dispatcher] Hoàn tất ReportJob ID: {}. File URL: {}", message.getJobId(), fileUrl);
+                // 4. Kết xuất ra file theo định dạng (Excel / PDF)
+                ExportFormat format = ExportFormat.valueOf(message.getFormat() != null ? message.getFormat() : "EXCEL");
+                ExportStrategy strategy = strategyFactory.getStrategy(format);
+                byte[] fileBytes = strategy.export(context);
 
-        } catch (Exception e) {
-            log.error("[Dispatcher] Thất bại khi xử lý ReportJob ID: {}. Lỗi: {}", message.getJobId(), e.getMessage(), e);
-            job.setStatus(ReportStatus.FAILED.name());
-            job.setErrorMessage(e.getMessage());
-            job.setCompletedAt(Instant.now());
-            reportJobRepository.save(job);
-            throw new RuntimeException("Lỗi xử lý báo cáo: " + e.getMessage(), e);
+                // 5. Tải file lên MinIO với ObjectKey tất định (Idempotent)
+                String timestamp = LocalDateTime.now().format(FILE_DATE_FORMAT);
+                String baseName = handler.getBaseFileName(message);
+                String originalFileName = baseName + "_" + timestamp + strategy.getFileExtension();
+                String objectKey = minioStorageService.buildObjectKey(jobId, originalFileName);
+
+                String fileUrl = minioStorageService.uploadReportWithKey(fileBytes, objectKey, strategy.getContentType());
+
+                // 6. Cập nhật ReportJob sang DONE (Transaction riêng)
+                reportJobStateService.markDone(jobId, fileUrl, objectKey);
+
+                // 7. Thông báo Realtime qua Redis Pub/Sub / SSE
+                reportSseNotifier.reportDone(message, fileUrl, originalFileName);
+
+                log.info("[Dispatcher] Hoàn tất ReportJob ID: {}. ObjectKey: {}, File URL: {}", jobId, objectKey, fileUrl);
+
+            } catch (Exception e) {
+                log.error("[Dispatcher] Thất bại khi xử lý ReportJob ID: {}. Lỗi: {}", jobId, e.getMessage(), e);
+
+                // Ghi nhận trạng thái FAILED ngay lập tức bằng transaction riêng biệt
+                try {
+                    reportJobStateService.markFailed(jobId, e.getMessage());
+                } catch (Exception dbEx) {
+                    log.error("[Dispatcher] Không thể ghi trạng thái FAILED cho Job {}: {}", jobId, dbEx.getMessage(), dbEx);
+                }
+
+                // Bắn thông báo thất bại tới người dùng
+                try {
+                    reportSseNotifier.reportFailed(message, e.getMessage());
+                } catch (Exception sseEx) {
+                    log.warn("[Dispatcher] Không thể phát SSE thất bại cho Job {}: {}", jobId, sseEx.getMessage());
+                }
+
+                throw new RuntimeException("Lỗi xử lý báo cáo: " + e.getMessage(), e);
+            }
+        } finally {
+            MDC.clear();
         }
     }
 }

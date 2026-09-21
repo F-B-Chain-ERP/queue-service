@@ -3,13 +3,13 @@ package com.erp.queue_service.handler.inv;
 import com.erp.core.domain.Material;
 import com.erp.core.domain.MaterialStockBalance;
 import com.erp.core.domain.Warehouse;
-import com.erp.queue_service.export.ReportColumnDefinition;
-import com.erp.queue_service.export.ReportDataContext;
 import com.erp.queue_service.handler.ModuleReportHandler;
 import com.erp.queue_service.messaging.ReportMessage;
 import com.erp.queue_service.repository.MaterialRepository;
 import com.erp.queue_service.repository.MaterialStockBalanceRepository;
 import com.erp.queue_service.repository.WarehouseRepository;
+import com.erp.core.report.ReportColumnDefinition;
+import com.erp.core.report.ReportDataContext;
 import jakarta.persistence.criteria.Predicate;
 import org.springframework.data.jpa.domain.Specification;
 import org.springframework.stereotype.Component;
@@ -104,6 +104,6 @@ public class InvReportHandler implements ModuleReportHandler {
         }
 
         String subtitle = "Thời gian kết xuất: " + LocalDate.now();
-        return new ReportDataContext("BÁO CÁO SỐ DƯ TỒN KHO NGUYÊN VẬT LIỆU", subtitle, columns, rows);
+        return ReportDataContext.simple("BÁO CÁO SỐ DƯ TỒN KHO NGUYÊN VẬT LIỆU", subtitle, columns, rows);
     }
 }

@@ -414,6 +414,11 @@ Tất cả các tham số cấu hình đều có thể được ghi đè linh ho
 | `MINIO_SECRET_KEY` | `app.minio.secret-key` | `erp123456@` | Secret key (password) MinIO. |
 | `MINIO_REPORT_BUCKET` | `app.minio.bucket-name` | `erp-reports` | Tên Bucket lưu trữ tệp báo cáo đã xuất. |
 | `MINIO_PUBLIC_URL` | `app.minio.public-url` | `/storage` | Tiền tố đường dẫn URL công khai tải tệp. |
+| **Cấu hình Redis** | | | |
+| `REDIS_HOST` | `spring.data.redis.host` | `localhost` (dev: `163.61.72.183`, prod: `redis`) | Địa chỉ Redis Broker / Pub-Sub. |
+| `REDIS_PORT` | `spring.data.redis.port` | `6379` | Cổng kết nối Redis. |
+| `REDIS_PASSWORD` | `spring.data.redis.password` | *(rỗng)* (dev: `erp_redis_2026`) | Mật khẩu xác thực Redis. |
+
 
 ---
 
@@ -497,7 +502,7 @@ ENTRYPOINT ["sh", "-c", "java $JAVA_OPTS -Djava.security.egd=file:/dev/./urandom
 # Đứng tại thư mục gốc dự án c:/ERP-UTT
 docker build -t erp-queue-service:latest -f queue-service/Dockerfile .
 
-# Chạy container kết nối mạng chung với RabbitMQ & PostgreSQL
+# Chạy container kết nối mạng chung với RabbitMQ, PostgreSQL, MinIO và Redis
 docker run -d \
   --name erp-queue-service \
   --restart unless-stopped \
@@ -506,6 +511,8 @@ docker run -d \
   -e RABBITMQ_HOST=163.61.72.183 \
   -e DB_HOST=163.61.72.183 \
   -e MINIO_ENDPOINT=http://163.61.72.183:9000 \
+  -e REDIS_HOST=163.61.72.183 \
+  -e REDIS_PASSWORD=erp_redis_2026 \
   erp-queue-service:latest
 ```
 

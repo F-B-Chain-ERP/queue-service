@@ -1,0 +1,70 @@
+server:
+  port: ${SERVER_PORT:8090}
+
+spring:
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://${DB_HOST:postgresql}:${DB_PORT:5432}/${DB_NAME:erp_dev}}
+    username: ${DB_USERNAME}
+    password: ${DB_PASSWORD}
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      maximum-pool-size: 10
+      minimum-idle: 2
+      connection-timeout: 30000
+      idle-timeout: 600000
+      max-lifetime: 1800000
+  rabbitmq:
+    host: ${RABBITMQ_HOST:rabbitmq}
+    port: ${RABBITMQ_PORT:5672}
+    username: ${RABBITMQ_USER:erp_rabbit}
+    password: ${RABBITMQ_PASS:erp123456@}
+    virtual-host: ${RABBITMQ_VHOST:erp_vhost}
+  data:
+    redis:
+      host: ${REDIS_HOST:redis}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD}
+      ssl:
+        enabled: ${REDIS_SSL_ENABLED:false}
+      timeout: 5000ms
+      lettuce:
+        pool:
+          max-active: 16
+          max-idle: 8
+          min-idle: 2
+
+app:
+  minio:
+    endpoint: ${MINIO_ENDPOINT:http://minio:9000}
+    access-key: ${MINIO_ACCESS_KEY}
+    secret-key: ${MINIO_SECRET_KEY}
+    bucket-name: ${MINIO_REPORT_BUCKET:${MINIO_BUCKET_NAME:erp-reports}}
+    public-url: ${MINIO_PUBLIC_URL:/storage}
+  report:
+    minio-bucket-name: ${MINIO_REPORT_BUCKET:erp-reports}
+    logo-path: ${REPORT_LOGO_PATH:classpath:/report/logo-erp.png}
+
+logging:
+  level:
+    com.erp: INFO
+    org.springframework.amqp: WARN
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      show-details: always
+      probes:
+        enabled: true
+    prometheus:
+      enabled: true
+  metrics:
+    tags:
+      application: ${spring.application.name:queue-service}
+      env: prod
+    distribution:
+      percentiles-histogram:
+        http.server.requests: true

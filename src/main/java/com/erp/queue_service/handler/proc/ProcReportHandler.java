@@ -3,13 +3,13 @@ package com.erp.queue_service.handler.proc;
 import com.erp.core.domain.PurchaseOrder;
 import com.erp.core.domain.Supplier;
 import com.erp.core.domain.Warehouse;
-import com.erp.queue_service.export.ReportColumnDefinition;
-import com.erp.queue_service.export.ReportDataContext;
 import com.erp.queue_service.handler.ModuleReportHandler;
 import com.erp.queue_service.messaging.ReportMessage;
 import com.erp.queue_service.repository.PurchaseOrderRepository;
 import com.erp.queue_service.repository.SupplierRepository;
 import com.erp.queue_service.repository.WarehouseRepository;
+import com.erp.core.report.ReportColumnDefinition;
+import com.erp.core.report.ReportDataContext;
 import jakarta.persistence.criteria.Predicate;
 import org.springframework.data.jpa.domain.Specification;
 import org.springframework.stereotype.Component;
@@ -126,6 +126,6 @@ public class ProcReportHandler implements ModuleReportHandler {
         }
 
         String subtitle = "Thời gian kết xuất: " + LocalDate.now();
-        return new ReportDataContext("BÁO CÁO TỔNG HỢP ĐƠN MUA HÀNG (PO)", subtitle, columns, rows);
+        return ReportDataContext.simple("BÁO CÁO TỔNG HỢP ĐƠN MUA HÀNG (PO)", subtitle, columns, rows);
     }
 }
