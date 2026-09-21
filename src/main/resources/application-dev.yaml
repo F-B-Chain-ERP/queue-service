@@ -7,6 +7,13 @@ spring:
     username: ${DB_USERNAME:erp_user}
     password: ${DB_PASSWORD:erp123456@}
     driver-class-name: org.postgresql.Driver
+    hikari:
+      pool-name: QueueHikariPool
+      maximum-pool-size: 10
+      minimum-idle: 2
+      connection-timeout: 30000
+      idle-timeout: 600000
+      max-lifetime: 1800000
   data:
     redis:
       host: ${REDIS_HOST:163.61.72.183}

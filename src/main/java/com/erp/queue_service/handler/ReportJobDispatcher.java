@@ -5,9 +5,11 @@ import com.erp.queue_service.export.ExportStrategy;
 import com.erp.queue_service.export.ExportStrategyFactory;
 import com.erp.core.report.ReportDataContext;
 import com.erp.queue_service.messaging.ReportMessage;
+import com.erp.queue_service.metrics.QueueObservabilityMetrics;
 import com.erp.queue_service.notification.ReportSseNotifier;
 import com.erp.queue_service.service.MinioStorageService;
 import com.erp.queue_service.service.ReportJobStateService;
+import io.micrometer.core.instrument.Timer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
@@ -33,17 +35,20 @@ public class ReportJobDispatcher {
     private final MinioStorageService minioStorageService;
     private final ReportJobStateService reportJobStateService;
     private final ReportSseNotifier reportSseNotifier;
+    private final QueueObservabilityMetrics queueMetrics;
 
     public ReportJobDispatcher(List<ModuleReportHandler> handlers,
                                ExportStrategyFactory strategyFactory,
                                MinioStorageService minioStorageService,
                                ReportJobStateService reportJobStateService,
-                               ReportSseNotifier reportSseNotifier) {
+                               ReportSseNotifier reportSseNotifier,
+                               QueueObservabilityMetrics queueMetrics) {
         this.handlers = handlers;
         this.strategyFactory = strategyFactory;
         this.minioStorageService = minioStorageService;
         this.reportJobStateService = reportJobStateService;
         this.reportSseNotifier = reportSseNotifier;
+        this.queueMetrics = queueMetrics;
     }
 
     /**
@@ -53,6 +58,7 @@ public class ReportJobDispatcher {
      */
     public void dispatch(ReportMessage message) {
         UUID jobId = message.getJobId();
+        Timer.Sample sample = queueMetrics.startJobTimer();
         try {
             MDC.put("jobId", jobId != null ? jobId.toString() : "UNKNOWN");
             MDC.put("module", message.getModule() != null ? message.getModule() : "");
@@ -65,6 +71,7 @@ public class ReportJobDispatcher {
             boolean claimed = reportJobStateService.claimJob(jobId);
             if (!claimed) {
                 log.warn("[Dispatcher] Không thể claim ReportJob ID: {} (Job đã được claim, hoàn tất, hoặc đã bị CANCELLED). Bỏ qua xử lý.", jobId);
+                queueMetrics.recordJobSkipped(sample, message.getModule(), "NOT_CLAIMED");
                 return;
             }
 
@@ -97,10 +104,15 @@ public class ReportJobDispatcher {
                 // 7. Thông báo Realtime qua Redis Pub/Sub / SSE
                 reportSseNotifier.reportDone(message, fileUrl, originalFileName);
 
+                int recordCount = (context != null && context.rows() != null) ? context.rows().size() : 0;
+                long fileSize = (fileBytes != null) ? fileBytes.length : 0;
+                queueMetrics.recordJobSuccess(sample, message.getModule(), message.getFormat(), fileSize, recordCount);
+
                 log.info("[Dispatcher] Hoàn tất ReportJob ID: {}. ObjectKey: {}, File URL: {}", jobId, objectKey, fileUrl);
 
             } catch (Exception e) {
                 log.error("[Dispatcher] Thất bại khi xử lý ReportJob ID: {}. Lỗi: {}", jobId, e.getMessage(), e);
+                queueMetrics.recordJobFailure(sample, message.getModule(), message.getFormat(), e.getClass().getSimpleName());
 
                 // Ghi nhận trạng thái FAILED ngay lập tức bằng transaction riêng biệt
                 try {

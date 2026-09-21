@@ -45,17 +45,20 @@ class ReportJobDispatcherTest {
     @Mock
     private ReportSseNotifier reportSseNotifier;
 
+    private com.erp.queue_service.metrics.QueueObservabilityMetrics queueMetrics;
     private ReportJobDispatcher dispatcher;
 
     @BeforeEach
     void setUp() {
         lenient().when(handler.supports("POS")).thenReturn(true);
+        queueMetrics = new com.erp.queue_service.metrics.QueueObservabilityMetrics(new io.micrometer.core.instrument.simple.SimpleMeterRegistry());
         dispatcher = new ReportJobDispatcher(
                 List.of(handler),
                 strategyFactory,
                 minioStorageService,
                 reportJobStateService,
-                reportSseNotifier
+                reportSseNotifier,
+                queueMetrics
         );
     }
 
