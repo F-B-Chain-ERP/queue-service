@@ -420,7 +420,7 @@
       },
       "targets": [
         {
-          "expr": "sum(rate(erp_queue_jobs_total[1m])) by (status, module)",
+          "expr": "sum(rate(erp_queue_jobs_total[1m])) by (status, module) or on() vector(0)",
           "legendFormat": "{{status}} - Module: {{module}}"
         }
       ],
@@ -443,15 +443,15 @@
       },
       "targets": [
         {
-          "expr": "histogram_quantile(0.50, sum(rate(erp_queue_job_duration_seconds_bucket[1m])) by (le, module))",
+          "expr": "histogram_quantile(0.50, sum(rate(erp_queue_job_duration_seconds_bucket[1m])) by (le, module)) or on() vector(0)",
           "legendFormat": "P50 Latency - {{module}}"
         },
         {
-          "expr": "histogram_quantile(0.95, sum(rate(erp_queue_job_duration_seconds_bucket[1m])) by (le, module))",
+          "expr": "histogram_quantile(0.95, sum(rate(erp_queue_job_duration_seconds_bucket[1m])) by (le, module)) or on() vector(0)",
           "legendFormat": "P95 Latency - {{module}}"
         },
         {
-          "expr": "histogram_quantile(0.99, sum(rate(erp_queue_job_duration_seconds_bucket[1m])) by (le, module))",
+          "expr": "histogram_quantile(0.99, sum(rate(erp_queue_job_duration_seconds_bucket[1m])) by (le, module)) or on() vector(0)",
           "legendFormat": "P99 Latency - {{module}}"
         }
       ],
@@ -484,7 +484,7 @@
         "showThresholdMarkers": true
       },
       "targets": [
-        { "expr": "erp_queue_active_jobs", "legendFormat": "Active In-Flight Jobs" }
+        { "expr": "erp_queue_active_jobs or vector(0)", "legendFormat": "Active In-Flight Jobs" }
       ],
       "title": "Active Jobs In-Flight",
       "type": "gauge"
