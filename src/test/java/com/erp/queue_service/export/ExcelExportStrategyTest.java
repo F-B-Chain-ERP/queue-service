@@ -76,4 +76,37 @@ class ExcelExportStrategyTest {
             assertThat(workbook.getAllPictures()).isNotEmpty();
         }
     }
+
+    @Test
+    @DisplayName("Xuất 50.000 dòng dữ liệu lớn với SXSSFWorkbook: hoàn tất nhanh chóng và không bị OOM")
+    void export_largeDataset_50kRows_succeedsWithoutOom() throws Exception {
+        int rowCount = 50_000;
+        List<Integer> ids = java.util.stream.IntStream.rangeClosed(1, rowCount).boxed().toList();
+        List<Map<String, Object>> lazyRows = new com.erp.core.report.LazyDtoRowList<>(ids, i -> Map.of(
+                "code", "DH-" + String.format("%05d", i),
+                "totalSales", new BigDecimal(i * 1000)
+        ));
+
+        ReportDataContext largeContext = new ReportDataContext(
+                "BÁO CÁO 50K ĐƠN HÀNG",
+                "Kiểm thử dữ liệu lớn",
+                null,
+                Map.of("rowCount", rowCount),
+                List.of(
+                        ReportColumnDefinition.text("code", "Mã đơn", 14),
+                        ReportColumnDefinition.currency("totalSales", "Tổng tiền", 16)
+                ),
+                lazyRows,
+                Map.of("label", "TỔNG CỘNG", "totalSales", new BigDecimal("50000000000")),
+                List.of()
+        );
+
+        java.io.File tempFile = strategy.exportToTempFile(largeContext);
+        try {
+            assertThat(tempFile).exists();
+            assertThat(tempFile.length()).isGreaterThan(100_000);
+        } finally {
+            tempFile.delete();
+        }
+    }
 }

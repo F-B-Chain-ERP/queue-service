@@ -20,8 +20,8 @@ import org.springframework.transaction.annotation.Transactional;
 public interface ReportJobRepository extends JpaRepository<ReportJob, UUID> {
 
     /**
-     * Conditional claim: Chỉ cho phép worker nhận job khi trạng thái hiện tại đúng là PENDING.
-     * Trả về số dòng cập nhật (1 nếu claim thành công, 0 nếu job đã bị CANCELLED hoặc worker khác claim).
+     * Conditional claim: nhận job PENDING hoặc reclaim một job PROCESSING khi RabbitMQ
+     * xác nhận đây là message được redeliver sau khi delivery trước bị gián đoạn.
      */
     @Transactional
     @Modifying
@@ -31,9 +31,13 @@ public interface ReportJobRepository extends JpaRepository<ReportJob, UUID> {
             j.startedAt = :now,
             j.heartbeatAt = :now,
             j.attemptCount = COALESCE(j.attemptCount, 0) + 1
-        WHERE j.id = :jobId AND j.status = 'PENDING'
+        WHERE j.id = :jobId
+          AND (j.status = 'PENDING'
+               OR (:allowProcessingReclaim = true AND j.status = 'PROCESSING'))
     """)
-    int claimJob(@Param("jobId") UUID jobId, @Param("now") Instant now);
+    int claimJob(@Param("jobId") UUID jobId,
+                 @Param("now") Instant now,
+                 @Param("allowProcessingReclaim") boolean allowProcessingReclaim);
 
     @Transactional
     @Modifying

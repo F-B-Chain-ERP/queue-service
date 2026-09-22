@@ -33,8 +33,8 @@ public class ReportJobStateService {
      * Commit ngay lập tức trong transaction độc lập.
      */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
-    public boolean claimJob(UUID jobId) {
-        int updated = reportJobRepository.claimJob(jobId, Instant.now());
+    public boolean claimJob(UUID jobId, boolean allowProcessingReclaim) {
+        int updated = reportJobRepository.claimJob(jobId, Instant.now(), allowProcessingReclaim);
         return updated > 0;
     }
 

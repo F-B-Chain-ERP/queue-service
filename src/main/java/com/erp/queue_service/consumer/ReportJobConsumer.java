@@ -32,12 +32,14 @@ public class ReportJobConsumer {
      */
     @RabbitListener(queues = "${app.rabbitmq.report.queue:erp.report.queue}", containerFactory = "rabbitListenerContainerFactory")
     public void consumeReportJob(ReportMessage message, Channel channel,
-                                 @Header(AmqpHeaders.DELIVERY_TAG) long deliveryTag) throws IOException {
-        log.info("[RabbitMQ-Consumer] Tiếp nhận thông điệp báo cáo: JobID={}, Module={}, Type={}",
-                message.getJobId(), message.getModule(), message.getReportType());
+                                 @Header(AmqpHeaders.DELIVERY_TAG) long deliveryTag,
+                                 @Header(name = AmqpHeaders.REDELIVERED, required = false) Boolean redelivered) throws IOException {
+        boolean isRedelivered = Boolean.TRUE.equals(redelivered);
+        log.info("[RabbitMQ-Consumer] Tiếp nhận thông điệp báo cáo: JobID={}, Module={}, Type={}, Redelivered={}",
+                message.getJobId(), message.getModule(), message.getReportType(), isRedelivered);
 
         try {
-            reportJobDispatcher.dispatch(message);
+            reportJobDispatcher.dispatch(message, isRedelivered);
             channel.basicAck(deliveryTag, false);
             log.info("[RabbitMQ-Consumer] Đã ACK thành công cho JobID={}", message.getJobId());
         } catch (Exception e) {

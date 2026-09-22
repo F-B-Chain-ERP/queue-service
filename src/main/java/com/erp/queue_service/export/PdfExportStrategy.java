@@ -87,9 +87,29 @@ public class PdfExportStrategy implements ExportStrategy {
         return ".pdf";
     }
 
+    public static final int MAX_PDF_ROWS = 5000;
+
     @Override
     public byte[] export(ReportDataContext context) {
         try (ByteArrayOutputStream out = new ByteArrayOutputStream()) {
+            exportToStream(context, out);
+            return out.toByteArray();
+        } catch (IllegalArgumentException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new RuntimeException("Lỗi khi xuất tệp PDF: " + e.getMessage(), e);
+        }
+    }
+
+    @Override
+    public void exportToStream(ReportDataContext context, java.io.OutputStream out) {
+        if (context.rows() != null && context.rows().size() > MAX_PDF_ROWS) {
+            throw new IllegalArgumentException(String.format(
+                    "Định dạng PDF chỉ hỗ trợ tối đa %,d dòng để đảm bảo định dạng trang in (yêu cầu hiện tại: %,d dòng). " +
+                    "Vui lòng chọn định dạng EXCEL để xuất toàn bộ dữ liệu.",
+                    MAX_PDF_ROWS, context.rows().size()));
+        }
+        try {
             Document document = new Document(PageSize.A4.rotate(), 20, 20, 25, 25);
             PdfWriter.getInstance(document, out);
             document.open();
@@ -134,7 +154,9 @@ public class PdfExportStrategy implements ExportStrategy {
             }
 
             document.close();
-            return out.toByteArray();
+            out.flush();
+        } catch (IllegalArgumentException e) {
+            throw e;
         } catch (Exception e) {
             throw new RuntimeException("Lỗi khi xuất tệp PDF: " + e.getMessage(), e);
         }
