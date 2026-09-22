@@ -65,4 +65,28 @@ class PdfExportStrategyTest {
         assertThat(bytes).hasSizeGreaterThan(500);
         assertThat(new String(bytes, StandardCharsets.ISO_8859_1)).startsWith("%PDF");
     }
+
+    @Test
+    @DisplayName("PDF Guardrail: từ chối xuất khi số lượng dòng > 5.000 và đưa ra thông báo gợi ý Excel")
+    void export_pdfGuardrail_exceedsLimit_throwsException() {
+        int rowCount = 5001;
+        List<Integer> ids = java.util.stream.IntStream.rangeClosed(1, rowCount).boxed().toList();
+        List<Map<String, Object>> lazyRows = new com.erp.core.report.LazyDtoRowList<>(ids, i -> Map.of("code", "DH-" + i));
+
+        ReportDataContext context = new ReportDataContext(
+                "BÁO CÁO QUÁ TẢI",
+                "Sub",
+                null,
+                Map.of("rowCount", rowCount),
+                List.of(ReportColumnDefinition.text("code", "Mã đơn", 12)),
+                lazyRows,
+                null,
+                List.of()
+        );
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> strategy.export(context))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Định dạng PDF chỉ hỗ trợ tối đa")
+                .hasMessageContaining("Vui lòng chọn định dạng EXCEL");
+    }
 }

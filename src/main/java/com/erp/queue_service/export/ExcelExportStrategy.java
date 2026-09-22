@@ -6,14 +6,15 @@ import com.erp.core.report.ReportDataContext;
 import com.erp.core.util.ReportLogoResolver;
 import org.apache.poi.ss.usermodel.*;
 import org.apache.poi.ss.util.CellRangeAddress;
+import org.apache.poi.xssf.streaming.SXSSFSheet;
+import org.apache.poi.xssf.streaming.SXSSFWorkbook;
 import org.apache.poi.xssf.usermodel.XSSFCellStyle;
 import org.apache.poi.xssf.usermodel.XSSFColor;
-import org.apache.poi.xssf.usermodel.XSSFFont;
-import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import java.io.ByteArrayOutputStream;
+import java.io.OutputStream;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
@@ -23,8 +24,11 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * Chiến lược xuất Excel (.xlsx) trong queue-service theo chuẩn thẩm mỹ tài liệu thiết kế:
- * logo A1:B3, màu brand #1E3A8A, zebra #F1F5F9, dòng tổng #E2E8F0, Sheet 2 "BẢNG PHỤ".
+ * Chiến lược xuất Excel (.xlsx) trong queue-service sử dụng Apache POI SXSSFWorkbook
+ * (Streaming Workbook) với sliding window 100 dòng.
+ *
+ * <p>Các dòng cũ được nén và ghi ra file tạm trên đĩa, giữ mức tiêu thụ RAM luôn phẳng O(1)
+ * ngay cả khi xuất 50.000 - 100.000+ bản ghi.</p>
  */
 @Component
 public class ExcelExportStrategy implements ExportStrategy {
@@ -63,8 +67,20 @@ public class ExcelExportStrategy implements ExportStrategy {
 
     @Override
     public byte[] export(ReportDataContext context) {
-        try (XSSFWorkbook workbook = new XSSFWorkbook();
-             ByteArrayOutputStream out = new ByteArrayOutputStream()) {
+        try (ByteArrayOutputStream out = new ByteArrayOutputStream()) {
+            exportToStream(context, out);
+            return out.toByteArray();
+        } catch (Exception e) {
+            throw new RuntimeException("Lỗi khi xuất tệp Excel: " + e.getMessage(), e);
+        }
+    }
+
+    @Override
+    public void exportToStream(ReportDataContext context, OutputStream out) {
+        // SXSSFWorkbook với sliding window 100 dòng trong RAM
+        SXSSFWorkbook workbook = new SXSSFWorkbook(100);
+        try {
+            workbook.setCompressTempFiles(true);
 
             DataFormat dataFormat = workbook.createDataFormat();
             Styles styles = createStyles(workbook, dataFormat);
@@ -74,13 +90,16 @@ public class ExcelExportStrategy implements ExportStrategy {
             renderSecondarySheet(workbook, styles, context);
 
             workbook.write(out);
-            return out.toByteArray();
+            out.flush();
         } catch (Exception e) {
-            throw new RuntimeException("Lỗi khi xuất tệp Excel: " + e.getMessage(), e);
+            throw new RuntimeException("Lỗi khi kết xuất dữ liệu Excel: " + e.getMessage(), e);
+        } finally {
+            // Xóa triệt để các file tạm .tmp trên ổ cứng do SXSSF tạo ra
+            workbook.dispose();
         }
     }
 
-    private void renderMainSheet(XSSFWorkbook workbook, Styles s, ReportDataContext context, byte[] logo) {
+    private void renderMainSheet(Workbook workbook, Styles s, ReportDataContext context, byte[] logo) {
         Sheet sheet = workbook.createSheet("Báo cáo");
 
         List<ReportColumnDefinition> columns = context.columns();
@@ -131,13 +150,12 @@ public class ExcelExportStrategy implements ExportStrategy {
             if (userWidth > 0) {
                 sheet.setColumnWidth(col, userWidth * 256);
             } else {
-                sheet.autoSizeColumn(col);
-                sheet.setColumnWidth(col, Math.max(sheet.getColumnWidth(col) + 1200, 3500));
+                sheet.setColumnWidth(col, 20 * 256);
             }
         }
     }
 
-    private void writeLogoHeader(XSSFWorkbook workbook, Sheet sheet, Styles s,
+    private void writeLogoHeader(Workbook workbook, Sheet sheet, Styles s,
                                  ReportDataContext context, byte[] logo, int colCount) {
         for (int r = 0; r < 3; r++) {
             Row row = sheet.getRow(r);
@@ -162,6 +180,9 @@ public class ExcelExportStrategy implements ExportStrategy {
         drawing.createPicture(anchor, pictureIdx);
 
         Row titleRow = sheet.getRow(0);
+        if (titleRow == null) {
+            titleRow = sheet.createRow(0);
+        }
         Cell titleCell = titleRow.createCell(2);
         titleCell.setCellValue(context.title() != null ? context.title().toUpperCase() : "BÁO CÁO HỆ THỐNG ERP");
         titleCell.setCellStyle(s.title);
@@ -169,6 +190,9 @@ public class ExcelExportStrategy implements ExportStrategy {
 
         if (context.subtitle() != null && !context.subtitle().isBlank()) {
             Row subRow = sheet.getRow(1);
+            if (subRow == null) {
+                subRow = sheet.createRow(1);
+            }
             Cell subCell = subRow.createCell(2);
             subCell.setCellValue(context.subtitle());
             subCell.setCellStyle(s.subtitle);
@@ -218,7 +242,7 @@ public class ExcelExportStrategy implements ExportStrategy {
         }
     }
 
-    private void renderSecondarySheet(XSSFWorkbook workbook, Styles s, ReportDataContext context) {
+    private void renderSecondarySheet(Workbook workbook, Styles s, ReportDataContext context) {
         List<Map<String, Object>> secondary = context.secondaryData();
         if (secondary == null || secondary.isEmpty()) {
             return;
@@ -258,17 +282,18 @@ public class ExcelExportStrategy implements ExportStrategy {
         }
 
         for (int col = 0; col < columns.size(); col++) {
-            sheet.autoSizeColumn(col);
-            sheet.setColumnWidth(col, Math.max(sheet.getColumnWidth(col) + 1200, 2800));
+            sheet.setColumnWidth(col, 20 * 256);
         }
     }
 
-    private void setTypedCell(Cell cell, Styles s, ReportColumnDefinition.ColumnType type, Object val, boolean zebra) {
+    private void setTypedCell(Cell cell, Styles s, ReportColumnDefinition.ColumnType type,
+                              Object val, boolean zebra) {
         if (val == null) {
             cell.setCellValue("-");
             cell.setCellStyle(zebra ? s.zebraText : s.text);
             return;
         }
+
         switch (type) {
             case CURRENCY -> {
                 cell.setCellValue(toDouble(val));
@@ -279,14 +304,22 @@ public class ExcelExportStrategy implements ExportStrategy {
                 cell.setCellStyle(zebra ? s.zebraNumber : s.number);
             }
             case DATE -> {
-                cell.setCellValue(val instanceof LocalDate ld ? ld.format(DATE_FORMATTER) : val.toString());
+                if (val instanceof LocalDate ld) {
+                    cell.setCellValue(ld.format(DATE_FORMATTER));
+                } else {
+                    cell.setCellValue(val.toString());
+                }
                 cell.setCellStyle(zebra ? s.zebraDate : s.date);
             }
             case DATETIME -> {
-                cell.setCellValue(val instanceof LocalDateTime ldt ? ldt.format(DATETIME_FORMATTER) : val.toString());
+                if (val instanceof LocalDateTime ldt) {
+                    cell.setCellValue(ldt.format(DATETIME_FORMATTER));
+                } else {
+                    cell.setCellValue(val.toString());
+                }
                 cell.setCellStyle(zebra ? s.zebraDate : s.date);
             }
-            default -> {
+            case TEXT -> {
                 cell.setCellValue(val.toString());
                 cell.setCellStyle(zebra ? s.zebraText : s.text);
             }
@@ -329,19 +362,21 @@ public class ExcelExportStrategy implements ExportStrategy {
         return Double.parseDouble(val.toString());
     }
 
-    private Styles createStyles(XSSFWorkbook wb, DataFormat dataFormat) {
+    private Styles createStyles(Workbook wb, DataFormat dataFormat) {
         Styles s = new Styles();
 
-        XSSFFont titleFont = wb.createFont();
+        Font titleFont = wb.createFont();
         titleFont.setFontName("Calibri");
         titleFont.setFontHeightInPoints((short) 16);
         titleFont.setBold(true);
-        titleFont.setColor(BRAND_COLOR);
+        if (titleFont instanceof org.apache.poi.xssf.usermodel.XSSFFont xssfFont) {
+            xssfFont.setColor(BRAND_COLOR);
+        }
         s.title = wb.createCellStyle();
         s.title.setFont(titleFont);
         s.title.setAlignment(HorizontalAlignment.LEFT);
 
-        XSSFFont subFont = wb.createFont();
+        Font subFont = wb.createFont();
         subFont.setFontName("Calibri");
         subFont.setFontHeightInPoints((short) 10);
         subFont.setItalic(true);
@@ -349,14 +384,18 @@ public class ExcelExportStrategy implements ExportStrategy {
         s.subtitle = wb.createCellStyle();
         s.subtitle.setFont(subFont);
 
-        XSSFFont headerFont = wb.createFont();
+        Font headerFont = wb.createFont();
         headerFont.setFontName("Calibri");
         headerFont.setFontHeightInPoints((short) 11);
         headerFont.setBold(true);
         headerFont.setColor(IndexedColors.WHITE.getIndex());
         s.header = wb.createCellStyle();
         s.header.setFont(headerFont);
-        s.header.setFillForegroundColor(BRAND_COLOR);
+        if (s.header instanceof XSSFCellStyle xssfHeader) {
+            xssfHeader.setFillForegroundColor(BRAND_COLOR);
+        } else {
+            s.header.setFillForegroundColor(IndexedColors.ROYAL_BLUE.getIndex());
+        }
         s.header.setFillPattern(FillPatternType.SOLID_FOREGROUND);
         s.header.setAlignment(HorizontalAlignment.CENTER);
         s.header.setVerticalAlignment(VerticalAlignment.CENTER);
@@ -374,16 +413,22 @@ public class ExcelExportStrategy implements ExportStrategy {
         s.zebraCurrencyStyle = cloneWithZebra(wb, s.currencyStyle);
         s.zebraDate = cloneWithZebra(wb, s.date);
 
-        XSSFFont footerFont = wb.createFont();
+        Font footerFont = wb.createFont();
         footerFont.setFontName("Calibri");
         footerFont.setFontHeightInPoints((short) 11);
         footerFont.setBold(true);
-        footerFont.setColor(BRAND_COLOR);
+        if (footerFont instanceof org.apache.poi.xssf.usermodel.XSSFFont xssfFooterFont) {
+            xssfFooterFont.setColor(BRAND_COLOR);
+        }
         s.footer = wb.createCellStyle();
         s.footer.setFont(footerFont);
         s.footer.setAlignment(HorizontalAlignment.LEFT);
         s.footer.setVerticalAlignment(VerticalAlignment.CENTER);
-        s.footer.setFillForegroundColor(FOOTER_COLOR);
+        if (s.footer instanceof XSSFCellStyle xssfFooter) {
+            xssfFooter.setFillForegroundColor(FOOTER_COLOR);
+        } else {
+            s.footer.setFillForegroundColor(IndexedColors.GREY_25_PERCENT.getIndex());
+        }
         s.footer.setFillPattern(FillPatternType.SOLID_FOREGROUND);
         setBorders(s.footer);
 
@@ -402,10 +447,14 @@ public class ExcelExportStrategy implements ExportStrategy {
         return style;
     }
 
-    private XSSFCellStyle cloneWithZebra(XSSFWorkbook wb, CellStyle base) {
-        XSSFCellStyle style = wb.createCellStyle();
+    private CellStyle cloneWithZebra(Workbook wb, CellStyle base) {
+        CellStyle style = wb.createCellStyle();
         style.cloneStyleFrom(base);
-        style.setFillForegroundColor(ZEBRA_COLOR);
+        if (style instanceof XSSFCellStyle xssfStyle) {
+            xssfStyle.setFillForegroundColor(ZEBRA_COLOR);
+        } else {
+            style.setFillForegroundColor(IndexedColors.GREY_25_PERCENT.getIndex());
+        }
         style.setFillPattern(FillPatternType.SOLID_FOREGROUND);
         return style;
     }
@@ -429,7 +478,7 @@ public class ExcelExportStrategy implements ExportStrategy {
     }
 
     private static int detectImageType(byte[] img) {
-        if (img.length > 3 && img[0] == (byte) 0x89 && img[1] == 0x50 && img[2] == 0x4E && img[3] == 0x47) {
+        if (img.length > 3 && img[0] == (byte) 0x89 && img[1] == (byte) 0x4E && img[2] == (byte) 0x47) {
             return Workbook.PICTURE_TYPE_PNG;
         }
         if (img.length > 2 && img[0] == (byte) 0xFF && img[1] == (byte) 0xD8) {

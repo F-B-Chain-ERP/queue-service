@@ -1,9 +1,9 @@
 package com.erp.queue_service.handler;
 
 import com.erp.core.enums.ExportFormat;
+import com.erp.core.report.ReportDataContext;
 import com.erp.queue_service.export.ExportStrategy;
 import com.erp.queue_service.export.ExportStrategyFactory;
-import com.erp.core.report.ReportDataContext;
 import com.erp.queue_service.messaging.ReportMessage;
 import com.erp.queue_service.metrics.QueueObservabilityMetrics;
 import com.erp.queue_service.notification.ReportSseNotifier;
@@ -15,6 +15,7 @@ import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
 import org.springframework.stereotype.Component;
 
+import java.io.File;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
@@ -22,7 +23,8 @@ import java.util.UUID;
 
 /**
  * Bộ điều phối trung tâm tiếp nhận Message từ RabbitMQ, định tuyến đến Handler tương ứng,
- * thực thi kết xuất file, tải lên MinIO và cập nhật bản ghi ReportJob trong cơ sở dữ liệu.
+ * thực thi kết xuất file theo mô hình streaming/file tạm, tải lên MinIO và cập nhật
+ * bản ghi ReportJob trong cơ sở dữ liệu kèm logging & metrics chi tiết.
  */
 @Component
 public class ReportJobDispatcher {
@@ -51,26 +53,42 @@ public class ReportJobDispatcher {
         this.queueMetrics = queueMetrics;
     }
 
+    private static String getMemoryStats() {
+        long free = Runtime.getRuntime().freeMemory() / (1024 * 1024);
+        long total = Runtime.getRuntime().totalMemory() / (1024 * 1024);
+        long max = Runtime.getRuntime().maxMemory() / (1024 * 1024);
+        long used = total - free;
+        return String.format("used=%dMB, total=%dMB, max=%dMB", used, total, max);
+    }
+
     /**
      * Điều phối và xử lý trọn vẹn tác vụ báo cáo bất đồng bộ.
-     * Lưu ý: Không đặt @Transactional ở cấp phương thức này để không giữ kết nối DB
+     * Không đặt @Transactional ở cấp phương thức này để không giữ kết nối DB
      * trong suốt quá trình truy vấn nặng và upload file MinIO.
      */
     public void dispatch(ReportMessage message) {
+        dispatch(message, false);
+    }
+
+    public void dispatch(ReportMessage message, boolean redelivered) {
         UUID jobId = message.getJobId();
         Timer.Sample sample = queueMetrics.startJobTimer();
+        File tempFile = null;
+        long totalStartTime = System.currentTimeMillis();
+
         try {
             MDC.put("jobId", jobId != null ? jobId.toString() : "UNKNOWN");
             MDC.put("module", message.getModule() != null ? message.getModule() : "");
             MDC.put("reportType", message.getReportType() != null ? message.getReportType() : "");
 
-            log.info("[Dispatcher] Bắt đầu xử lý ReportJob ID: {}, Module: {}, Type: {}",
-                    jobId, message.getModule(), message.getReportType());
+            log.info("[Dispatcher] [START] Bắt đầu tiếp nhận ReportJob ID: {}, Module: {}, Type: {}, Format: {} | RAM: {}",
+                    jobId, message.getModule(), message.getReportType(), message.getFormat(), getMemoryStats());
 
             // 1. Conditional Claim Job (Transaction riêng)
-            boolean claimed = reportJobStateService.claimJob(jobId);
+            boolean claimed = reportJobStateService.claimJob(jobId, redelivered);
             if (!claimed) {
-                log.warn("[Dispatcher] Không thể claim ReportJob ID: {} (Job đã được claim, hoàn tất, hoặc đã bị CANCELLED). Bỏ qua xử lý.", jobId);
+                log.warn("[Dispatcher] [SKIPPED] Không thể claim ReportJob ID: {} (redelivered={}; job đang được xử lý hoặc đã kết thúc). Bỏ qua xử lý.",
+                        jobId, redelivered);
                 queueMetrics.recordJobSkipped(sample, message.getModule(), "NOT_CLAIMED");
                 return;
             }
@@ -82,21 +100,69 @@ public class ReportJobDispatcher {
                         .findFirst()
                         .orElseThrow(() -> new IllegalArgumentException("Không tìm thấy handler cho module: " + message.getModule()));
 
-                // 3. Trích xuất dữ liệu báo cáo (chạy ngoài transaction DB dài)
-                ReportDataContext context = handler.generateReportData(message);
+                // 3. Trích xuất dữ liệu báo cáo
+                long queryStartTime = System.currentTimeMillis();
+                log.info("[Dispatcher] [QUERY_START] Bắt đầu trích xuất dữ liệu từ handler: {} | RAM: {}",
+                        handler.getClass().getSimpleName(), getMemoryStats());
 
-                // 4. Kết xuất ra file theo định dạng (Excel / PDF)
+                ReportDataContext context = handler.generateReportData(message);
+                long queryDuration = System.currentTimeMillis() - queryStartTime;
+                int rowCount = (context != null && context.rows() != null) ? context.rows().size() : 0;
+
+                // Cập nhật heartbeat sau bước query
+                reportJobStateService.updateHeartbeat(jobId);
+
+                log.info("[Dispatcher] [QUERY_DONE] Đã trích xuất xong {} dòng dữ liệu trong {} ms | RAM: {}",
+                        rowCount, queryDuration, getMemoryStats());
+
+                // 4. Kết xuất ra file theo định dạng (SXSSF Excel / PDF)
+                long renderStartTime = System.currentTimeMillis();
                 ExportFormat format = ExportFormat.valueOf(message.getFormat() != null ? message.getFormat() : "EXCEL");
                 ExportStrategy strategy = strategyFactory.getStrategy(format);
-                byte[] fileBytes = strategy.export(context);
 
-                // 5. Tải file lên MinIO với ObjectKey tất định (Idempotent)
+                log.info("[Dispatcher] [RENDER_START] Bắt đầu kết xuất ra file định dạng {} | RAM: {}",
+                        format, getMemoryStats());
+
                 String timestamp = LocalDateTime.now().format(FILE_DATE_FORMAT);
                 String baseName = handler.getBaseFileName(message);
                 String originalFileName = baseName + "_" + timestamp + strategy.getFileExtension();
                 String objectKey = minioStorageService.buildObjectKey(jobId, originalFileName);
 
-                String fileUrl = minioStorageService.uploadReportWithKey(fileBytes, objectKey, strategy.getContentType());
+                long fileSize = 0;
+                String fileUrl = null;
+
+                try {
+                    tempFile = strategy.exportToTempFile(context);
+                    if (tempFile != null && tempFile.exists() && tempFile.length() > 0) {
+                        fileSize = tempFile.length();
+                    }
+                } catch (Exception ex) {
+                    log.warn("[Dispatcher] exportToTempFile không khả dụng ({}), chuyển sang export byte[] thông thường", ex.getMessage());
+                }
+
+                long renderDuration = System.currentTimeMillis() - renderStartTime;
+
+                // Cập nhật heartbeat sau bước render
+                reportJobStateService.updateHeartbeat(jobId);
+
+                // 5. Tải file lên MinIO với ObjectKey tất định
+                long uploadStartTime = System.currentTimeMillis();
+                log.info("[Dispatcher] [UPLOAD_START] Tải file lên MinIO (bucket key: {})", objectKey);
+
+                if (tempFile != null && tempFile.exists() && tempFile.length() > 0) {
+                    log.info("[Dispatcher] [RENDER_DONE] Đã ghi ra file tạm {} (dung lượng: {} bytes ~ {} KB) trong {} ms | RAM: {}",
+                            tempFile.getName(), fileSize, fileSize / 1024, renderDuration, getMemoryStats());
+                    fileUrl = minioStorageService.uploadReportFromFile(tempFile, objectKey, strategy.getContentType());
+                } else {
+                    byte[] fileBytes = strategy.export(context);
+                    fileSize = fileBytes != null ? fileBytes.length : 0;
+                    log.info("[Dispatcher] [RENDER_DONE] Đã kết xuất byte[] (dung lượng: {} bytes ~ {} KB) trong {} ms | RAM: {}",
+                            fileSize, fileSize / 1024, renderDuration, getMemoryStats());
+                    fileUrl = minioStorageService.uploadReportWithKey(fileBytes, objectKey, strategy.getContentType());
+                }
+
+                long uploadDuration = System.currentTimeMillis() - uploadStartTime;
+                log.info("[Dispatcher] [UPLOAD_DONE] Tải lên MinIO hoàn tất trong {} ms. URL: {}", uploadDuration, fileUrl);
 
                 // 6. Cập nhật ReportJob sang DONE (Transaction riêng)
                 reportJobStateService.markDone(jobId, fileUrl, objectKey);
@@ -104,14 +170,14 @@ public class ReportJobDispatcher {
                 // 7. Thông báo Realtime qua Redis Pub/Sub / SSE
                 reportSseNotifier.reportDone(message, fileUrl, originalFileName);
 
-                int recordCount = (context != null && context.rows() != null) ? context.rows().size() : 0;
-                long fileSize = (fileBytes != null) ? fileBytes.length : 0;
-                queueMetrics.recordJobSuccess(sample, message.getModule(), message.getFormat(), fileSize, recordCount);
+                queueMetrics.recordJobSuccess(sample, message.getModule(), message.getFormat(), fileSize, rowCount);
 
-                log.info("[Dispatcher] Hoàn tất ReportJob ID: {}. ObjectKey: {}, File URL: {}", jobId, objectKey, fileUrl);
+                long totalDuration = System.currentTimeMillis() - totalStartTime;
+                log.info("[Dispatcher] [SUCCESS] Hoàn tất toàn bộ ReportJob ID: {} trong {} ms (Query: {} ms, Render: {} ms, Upload: {} ms). File: {}",
+                        jobId, totalDuration, queryDuration, renderDuration, uploadDuration, objectKey);
 
             } catch (Exception e) {
-                log.error("[Dispatcher] Thất bại khi xử lý ReportJob ID: {}. Lỗi: {}", jobId, e.getMessage(), e);
+                log.error("[Dispatcher] [FAILED] Thất bại khi xử lý ReportJob ID: {}. Lỗi: {}", jobId, e.getMessage(), e);
                 queueMetrics.recordJobFailure(sample, message.getModule(), message.getFormat(), e.getClass().getSimpleName());
 
                 // Ghi nhận trạng thái FAILED ngay lập tức bằng transaction riêng biệt
@@ -129,6 +195,14 @@ public class ReportJobDispatcher {
                 }
 
                 throw new RuntimeException("Lỗi xử lý báo cáo: " + e.getMessage(), e);
+            } finally {
+                // Xóa file tạm trên đĩa để không làm đầy storage
+                if (tempFile != null && tempFile.exists()) {
+                    boolean deleted = tempFile.delete();
+                    if (!deleted) {
+                        tempFile.deleteOnExit();
+                    }
+                }
             }
         } finally {
             MDC.clear();

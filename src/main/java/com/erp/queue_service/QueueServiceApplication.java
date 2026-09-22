@@ -4,11 +4,13 @@ import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.persistence.autoconfigure.EntityScan;
 import org.springframework.data.jpa.repository.config.EnableJpaRepositories;
+import org.springframework.scheduling.annotation.EnableScheduling;
 
 /**
  * Điểm khởi chạy của dịch vụ xử lý hàng đợi và tác vụ xuất báo cáo (queue-service).
  */
 @SpringBootApplication
+@EnableScheduling
 @EntityScan(basePackages = {"com.erp.core.domain"})
 @EnableJpaRepositories(basePackages = {"com.erp.queue_service.repository"})
 public class QueueServiceApplication {

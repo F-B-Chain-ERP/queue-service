@@ -1,57 +1,53 @@
 package com.erp.queue_service.handler.pos;
 
-import com.erp.core.constants.ReportExportConstants;
 import com.erp.core.domain.Branch;
-import com.erp.core.domain.Order;
-import com.erp.core.domain.OrderItem;
 import com.erp.core.enums.ReportType;
 import com.erp.core.report.ReportColumnDefinition;
 import com.erp.core.report.ReportDataContext;
+import com.erp.core.dto.report.pos.OrderExportDto;
+import com.erp.core.dto.report.pos.ProductSalesSummaryDto;
+import com.erp.core.report.LazyDtoRowList;
 import com.erp.queue_service.handler.ModuleReportHandler;
 import com.erp.queue_service.messaging.ReportMessage;
 import com.erp.queue_service.repository.BranchRepository;
-import com.erp.queue_service.repository.OrderItemRepository;
-import com.erp.queue_service.repository.OrderRepository;
-import jakarta.persistence.criteria.Predicate;
-import org.springframework.data.jpa.domain.Specification;
+import com.erp.queue_service.repository.PosReportCriteria;
+import com.erp.queue_service.repository.PosReportQueryRepository;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Slice;
 import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
-import java.math.RoundingMode;
 import java.time.Instant;
 import java.time.LocalDate;
-import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.util.*;
-import java.util.function.Function;
-import java.util.stream.Collectors;
 
 /**
  * Handler trích xuất dữ liệu báo cáo phân hệ POS trong queue-service.
  *
- * <p>Hỗ trợ 2 mẫu báo cáo theo hợp đồng {@link ReportExportConstants}:
+ * <p>Được thiết kế tối ưu hóa bộ nhớ RAM với:
  * <ul>
- *   <li>{@code POS_ORDER_EXPORT} — danh sách chi tiết đơn hàng theo bộ lọc.</li>
- *   <li>{@code POS_SALES_SUMMARY} — tổng hợp doanh thu theo sản phẩm/biến thể
- *       kèm giá vốn (COGS), lãi gộp và bảng phân bổ kênh thanh toán.</li>
+ *   <li>Truy vấn phân trang theo lô (Slice 2.000 dòng) và DTO projection để bypass Hibernate PersistenceContext.</li>
+ *   <li>Lazy row transformation ({@link LazyDtoRowList}) không giữ Map trong heap.</li>
+ *   <li>Tổng hợp doanh thu sản phẩm trực tiếp từ DB qua GROUP BY thay vì tải toàn bộ OrderItem vào RAM.</li>
  * </ul>
- *
- * <p>Để tương thích cả mã chuẩn lẫn tên của tài liệu thiết kế
- * ({@code ORDER_LIST}/{@code SALES_SUMMARY}), mọi phân nhánh đều chuẩn hoá qua
- * {@link ReportType}.</p>
+ * </p>
  */
 @Component
 public class PosReportHandler implements ModuleReportHandler {
 
-    private final OrderRepository orderRepository;
-    private final OrderItemRepository orderItemRepository;
+    private static final Logger log = LoggerFactory.getLogger(PosReportHandler.class);
+    private static final int BATCH_SIZE = 2000;
+
+    private final PosReportQueryRepository reportQueryRepository;
     private final BranchRepository branchRepository;
 
-    public PosReportHandler(OrderRepository orderRepository,
-                            OrderItemRepository orderItemRepository,
+    public PosReportHandler(PosReportQueryRepository reportQueryRepository,
                             BranchRepository branchRepository) {
-        this.orderRepository = orderRepository;
-        this.orderItemRepository = orderItemRepository;
+        this.reportQueryRepository = reportQueryRepository;
         this.branchRepository = branchRepository;
     }
 
@@ -76,73 +72,27 @@ public class PosReportHandler implements ModuleReportHandler {
         return generateOrderListData(message);
     }
 
-    private Specification<Order> buildOrderSpec(Map<String, Object> params, UUID branchId) {
-        String orderType = (String) params.get("orderType");
-        String status = (String) params.get("status");
-        String fromDateStr = (String) params.get("fromDate");
-        String toDateStr = (String) params.get("toDate");
-
-        Instant fromInstant = fromDateStr != null
-                ? LocalDate.parse(fromDateStr).atStartOfDay(ZoneId.systemDefault()).toInstant()
-                : null;
-        Instant toInstant = toDateStr != null
-                ? LocalDate.parse(toDateStr).plusDays(1).atStartOfDay(ZoneId.systemDefault()).toInstant()
-                : null;
-
-        return (root, query, cb) -> {
-            List<Predicate> predicates = new ArrayList<>();
-            if (branchId != null) {
-                predicates.add(cb.equal(root.get("branchId"), branchId));
-            }
-            if (orderType != null && !orderType.isBlank()) {
-                predicates.add(cb.equal(root.get("orderType"), orderType));
-            }
-            if (status != null && !status.isBlank()) {
-                predicates.add(cb.equal(root.get("status"), status));
-            }
-            if (fromInstant != null) {
-                predicates.add(cb.greaterThanOrEqualTo(root.<Instant>get("createdAt"), fromInstant));
-            }
-            if (toInstant != null) {
-                predicates.add(cb.lessThan(root.<Instant>get("createdAt"), toInstant));
-            }
-            return cb.and(predicates.toArray(new Predicate[0]));
-        };
-    }
-
-    private static String paymentChannelOf(Order o) {
-        return o.getPaymentMethod() != null && !o.getPaymentMethod().isBlank() ? o.getPaymentMethod() : "-";
-    }
-
-    private Map<UUID, Branch> loadBranchMap(List<Order> orders) {
-        Set<UUID> branchIds = orders.stream().map(Order::getBranchId).collect(Collectors.toSet());
-        if (branchIds.isEmpty()) {
-            return Collections.emptyMap();
-        }
-        return branchRepository.findAllById(branchIds).stream()
-                .collect(Collectors.toMap(Branch::getId, Function.identity()));
-    }
-
-    private String buildSubtitle(Map<String, Object> params, UUID branchId, Map<UUID, Branch> branchMap) {
+    private String buildSubtitle(Map<String, Object> params, UUID branchId) {
         StringBuilder subtitle = new StringBuilder("Thời gian kết xuất: ").append(LocalDate.now());
         if (params.get("fromDate") != null || params.get("toDate") != null) {
             subtitle.append(" | Từ ngày: ").append(params.get("fromDate"))
                     .append(" Đến ngày: ").append(params.get("toDate"));
         }
-        if (branchId != null && branchMap.containsKey(branchId)) {
-            subtitle.append(" | Chi nhánh: ").append(branchMap.get(branchId).getName());
+        if (branchId != null) {
+            String branchName = branchRepository.findById(branchId)
+                    .map(Branch::getName)
+                    .orElse(branchId.toString());
+            subtitle.append(" | Chi nhánh: ").append(branchName);
         }
         return subtitle.toString();
     }
 
-    // ==== MẪU POS_ORDER_EXPORT: danh sách chi tiết đơn hàng ====
+    // ==== MẪU POS_ORDER_EXPORT: danh sách chi tiết đơn hàng (Streaming Chunking) ====
 
     private ReportDataContext generateOrderListData(ReportMessage message) {
         Map<String, Object> params = message.getParams() != null ? message.getParams() : Collections.emptyMap();
         UUID branchId = message.getBranchId();
-
-        List<Order> orders = orderRepository.findAll(buildOrderSpec(params, branchId));
-        Map<UUID, Branch> branchMap = loadBranchMap(orders);
+        PosReportCriteria criteria = buildCriteria(params, branchId);
 
         List<ReportColumnDefinition> columns = List.of(
                 ReportColumnDefinition.text("orderCode", "Mã đơn", 14),
@@ -160,46 +110,78 @@ public class PosReportHandler implements ModuleReportHandler {
                 ReportColumnDefinition.currency("totalAmount", "Tổng tiền", 16)
         );
 
-        List<Map<String, Object>> rows = new ArrayList<>();
-        for (Order o : orders) {
-            Map<String, Object> row = new LinkedHashMap<>();
-            row.put("orderCode", o.getOrderCode());
-            LocalDateTime ldt = o.getCreatedAt() != null
-                    ? LocalDateTime.ofInstant(o.getCreatedAt(), ZoneId.systemDefault())
-                    : null;
-            row.put("createdAt", ldt);
-            Branch b = branchMap.get(o.getBranchId());
-            row.put("branchName", b != null ? b.getName() : o.getBranchId().toString());
-            row.put("customerName", o.getCustomerName());
-            row.put("customerPhone", o.getCustomerPhone());
-            row.put("orderType", o.getOrderType());
-            row.put("status", o.getStatus());
-            row.put("paymentMethod", paymentChannelOf(o));
-            row.put("paymentStatus", o.getPaymentStatus());
-            row.put("subtotalAmount", o.getSubtotalAmount());
-            row.put("discountAmount", o.getDiscountAmount());
-            row.put("deliveryFee", o.getDeliveryFee());
-            row.put("totalAmount", o.getTotalAmount());
-            rows.add(row);
-        }
+        log.info("[PosReport] Bắt đầu trích xuất đơn hàng theo lô (batchSize={}) cho Job ID: {}",
+                BATCH_SIZE, message.getJobId());
+
+        List<OrderExportDto> allDtos = new ArrayList<>();
+        BigDecimal sumSubtotal = BigDecimal.ZERO;
+        BigDecimal sumDiscount = BigDecimal.ZERO;
+        BigDecimal sumDeliveryFee = BigDecimal.ZERO;
+        BigDecimal sumTotalAmount = BigDecimal.ZERO;
+
+        Map<String, Long> paymentCounts = new LinkedHashMap<>();
+        Map<String, BigDecimal> paymentAmounts = new LinkedHashMap<>();
+
+        int pageIndex = 0;
+        Slice<OrderExportDto> slice;
+        long startTime = System.currentTimeMillis();
+
+        do {
+            Pageable pageable = PageRequest.of(pageIndex, BATCH_SIZE);
+            slice = reportQueryRepository.findOrderExportSlice(criteria, pageable);
+            List<OrderExportDto> batch = slice.getContent();
+            allDtos.addAll(batch);
+
+            for (OrderExportDto dto : batch) {
+                if (dto.subtotalAmount() != null) sumSubtotal = sumSubtotal.add(dto.subtotalAmount());
+                if (dto.discountAmount() != null) sumDiscount = sumDiscount.add(dto.discountAmount());
+                if (dto.deliveryFee() != null) sumDeliveryFee = sumDeliveryFee.add(dto.deliveryFee());
+                if (dto.totalAmount() != null) sumTotalAmount = sumTotalAmount.add(dto.totalAmount());
+
+                String channel = (dto.paymentMethod() != null && !dto.paymentMethod().isBlank()) ? dto.paymentMethod() : "-";
+                paymentCounts.merge(channel, 1L, Long::sum);
+                paymentAmounts.merge(channel, dto.totalAmount() != null ? dto.totalAmount() : BigDecimal.ZERO, BigDecimal::add);
+            }
+
+            pageIndex++;
+            if (pageIndex % 5 == 0 || !slice.hasNext()) {
+                long elapsed = System.currentTimeMillis() - startTime;
+                long freeMem = Runtime.getRuntime().freeMemory() / (1024 * 1024);
+                long totalMem = Runtime.getRuntime().totalMemory() / (1024 * 1024);
+                log.info("[PosReport] Lô {}: Đã tải {}, dòng (tổng {}, dòng) | RAM Heap used: {}MB / {}MB | Thời gian: {}s",
+                        pageIndex, batch.size(), allDtos.size(), (totalMem - freeMem), totalMem, String.format("%.2f", elapsed / 1000.0));
+            }
+        } while (slice.hasNext());
 
         Map<String, Object> summary = new LinkedHashMap<>();
         summary.put("label", "TỔNG CỘNG");
-        summary.put("orderCount", orders.size());
-        summary.put("subtotalAmount", sum(orders, o -> o.getSubtotalAmount()));
-        summary.put("discountAmount", sum(orders, o -> o.getDiscountAmount()));
-        summary.put("deliveryFee", sum(orders, o -> o.getDeliveryFee()));
-        summary.put("totalAmount", sum(orders, o -> o.getTotalAmount()));
+        summary.put("orderCount", allDtos.size());
+        summary.put("subtotalAmount", sumSubtotal);
+        summary.put("discountAmount", sumDiscount);
+        summary.put("deliveryFee", sumDeliveryFee);
+        summary.put("totalAmount", sumTotalAmount);
+
+        List<Map<String, Object>> paymentBreakdownRows = new ArrayList<>();
+        paymentCounts.keySet().stream().sorted().forEach(channel -> {
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("channel", channel);
+            row.put("orderCount", paymentCounts.get(channel));
+            row.put("amount", paymentAmounts.getOrDefault(channel, BigDecimal.ZERO));
+            paymentBreakdownRows.add(row);
+        });
+
+        // Sử dụng LazyDtoRowList để chuyển đổi DTO sang Map on-demand khi render
+        List<Map<String, Object>> lazyRows = new LazyDtoRowList<>(allDtos, OrderExportDto::toRowMap);
 
         return new ReportDataContext(
                 "BÁO CÁO CHI TIẾT ĐƠN HÀNG POS",
-                buildSubtitle(params, branchId, branchMap),
+                buildSubtitle(params, branchId),
                 null,
-                Map.of("rowCount", orders.size()),
+                Map.of("rowCount", allDtos.size()),
                 columns,
-                rows,
+                lazyRows,
                 summary,
-                paymentMethodBreakdown(orders)
+                paymentBreakdownRows
         );
     }
 
@@ -208,9 +190,7 @@ public class PosReportHandler implements ModuleReportHandler {
     private ReportDataContext generateSalesSummaryData(ReportMessage message) {
         Map<String, Object> params = message.getParams() != null ? message.getParams() : Collections.emptyMap();
         UUID branchId = message.getBranchId();
-
-        List<Order> orders = orderRepository.findAll(buildOrderSpec(params, branchId));
-        Map<UUID, Branch> branchMap = loadBranchMap(orders);
+        PosReportCriteria criteria = buildCriteria(params, branchId);
 
         List<ReportColumnDefinition> columns = List.of(
                 ReportColumnDefinition.text("productCode", "Mã SP", 14),
@@ -224,141 +204,74 @@ public class PosReportHandler implements ModuleReportHandler {
                 ReportColumnDefinition.text("profitMargin", "Biên LN %", 12)
         );
 
-        List<OrderItem> orderItems = loadActiveItems(orders);
-        List<Map<String, Object>> rows = buildProductSummaryRows(orderItems);
+        log.info("[PosReport] Truy vấn tổng hợp doanh thu sản phẩm trực tiếp từ DB cho Job ID: {}", message.getJobId());
 
-        return new ReportDataContext(
-                "BÁO CÁO TỔNG HỢP DOANH THU POS",
-                buildSubtitle(params, branchId, branchMap),
-                null,
-                Map.of(
-                        "rowCount", rows.size(),
-                        "orderCount", orders.size(),
-                        "itemCount", orderItems.size()
-                ),
-                columns,
-                rows,
-                buildProductSummaryTotal(orders, orderItems),
-                paymentMethodBreakdown(orders)
-        );
-    }
+        // Tổng hợp trực tiếp tại DB qua GROUP BY
+        List<ProductSalesSummaryDto> productSummaries = reportQueryRepository.summarizeSalesByProduct(criteria);
 
-    /** Nạp chi tiết sản phẩm hợp lệ (ACTIVE) của toàn bộ đơn đã lọc — tránh truy vấn N+1. */
-    private List<OrderItem> loadActiveItems(List<Order> orders) {
-        if (orders.isEmpty()) {
-            return Collections.emptyList();
+        long totalQuantity = 0;
+        BigDecimal totalRevenue = BigDecimal.ZERO;
+        BigDecimal totalCogs = BigDecimal.ZERO;
+
+        for (ProductSalesSummaryDto p : productSummaries) {
+            if (p.totalQuantity() != null) totalQuantity += p.totalQuantity();
+            if (p.totalRevenue() != null) totalRevenue = totalRevenue.add(p.totalRevenue());
+            if (p.totalCogs() != null) totalCogs = totalCogs.add(p.totalCogs());
         }
-        List<UUID> orderIds = orders.stream().map(Order::getId).collect(Collectors.toList());
-        return orderItemRepository.findByOrderIdIn(orderIds).stream()
-                .filter(item -> item.getStatus() == null || "ACTIVE".equalsIgnoreCase(item.getStatus()))
-                .toList();
-    }
 
-    /** Gộp doanh thu/COGS/lãi gộp theo từng sản phẩm + biến thể. */
-    private List<Map<String, Object>> buildProductSummaryRows(List<OrderItem> orderItems) {
-        Map<String, List<OrderItem>> grouped = orderItems.stream()
-                .collect(Collectors.groupingBy(PosReportHandler::productKey,
-                        LinkedHashMap::new, Collectors.toList()));
-
-        List<Map<String, Object>> rows = new ArrayList<>();
-        grouped.forEach((key, items) -> {
-            int quantity = items.stream().mapToInt(PosReportHandler::quantityOf).sum();
-            BigDecimal revenue = sumAmount(items, OrderItem::getTotalPrice);
-            BigDecimal cogs = sumAmount(items, PosReportHandler::itemCogs);
-            BigDecimal grossProfit = revenue.subtract(cogs);
-            BigDecimal unitPrice = revenue.divide(BigDecimal.valueOf(Math.max(quantity, 1)),
-                    2, RoundingMode.HALF_UP);
-            BigDecimal profitMargin = revenue.signum() != 0
-                    ? grossProfit.multiply(BigDecimal.valueOf(100)).divide(revenue, 2, RoundingMode.HALF_UP)
-                    : BigDecimal.ZERO;
-
-            OrderItem first = items.get(0);
-            Map<String, Object> row = new LinkedHashMap<>();
-            row.put("productCode", first.getProductCode());
-            row.put("productName", first.getProductName());
-            row.put("variantName", first.getVariantName() != null ? first.getVariantName() : "");
-            row.put("quantity", quantity);
-            row.put("unitPrice", unitPrice);
-            row.put("revenue", revenue);
-            row.put("cogs", cogs);
-            row.put("grossProfit", grossProfit);
-            row.put("profitMargin", profitMargin.setScale(1, RoundingMode.HALF_UP).toPlainString() + "%");
-            rows.add(row);
-        });
-        return rows;
-    }
-
-    /** Dòng tổng cộng của báo cáo tổng hợp doanh thu theo sản phẩm. */
-    private Map<String, Object> buildProductSummaryTotal(List<Order> orders, List<OrderItem> orderItems) {
-        BigDecimal revenue = sumAmount(orderItems, OrderItem::getTotalPrice);
-        BigDecimal cogs = sumAmount(orderItems, PosReportHandler::itemCogs);
-        BigDecimal grossProfit = revenue.subtract(cogs);
-        BigDecimal profitMargin = revenue.signum() != 0
-                ? grossProfit.multiply(BigDecimal.valueOf(100)).divide(revenue, 2, RoundingMode.HALF_UP)
+        BigDecimal totalGrossProfit = totalRevenue.subtract(totalCogs);
+        BigDecimal totalMargin = totalRevenue.signum() != 0
+                ? totalGrossProfit.multiply(BigDecimal.valueOf(100)).divide(totalRevenue, 2, java.math.RoundingMode.HALF_UP)
                 : BigDecimal.ZERO;
 
         Map<String, Object> summary = new LinkedHashMap<>();
         summary.put("label", "TỔNG CỘNG");
-        summary.put("orderCount", orders.size());
-        summary.put("quantity", orderItems.stream().mapToInt(PosReportHandler::quantityOf).sum());
-        summary.put("revenue", revenue);
-        summary.put("cogs", cogs);
-        summary.put("grossProfit", grossProfit);
-        summary.put("profitMargin", profitMargin);
-        return summary;
+        summary.put("quantity", totalQuantity);
+        summary.put("revenue", totalRevenue);
+        summary.put("cogs", totalCogs);
+        summary.put("grossProfit", totalGrossProfit);
+        summary.put("profitMargin", totalMargin.setScale(1, java.math.RoundingMode.HALF_UP).toPlainString() + "%");
+
+        List<Map<String, Object>> lazyRows = new LazyDtoRowList<>(productSummaries, ProductSalesSummaryDto::toRowMap);
+
+        return new ReportDataContext(
+                "BÁO CÁO TỔNG HỢP DOANH THU POS",
+                buildSubtitle(params, branchId),
+                null,
+                Map.of("rowCount", productSummaries.size()),
+                columns,
+                lazyRows,
+                summary,
+                Collections.emptyList()
+        );
     }
 
-    private static BigDecimal itemCogs(OrderItem item) {
-        if (item.getUnitCogsAmount() == null || item.getQuantity() == null) {
-            return BigDecimal.ZERO;
+    private PosReportCriteria buildCriteria(Map<String, Object> params, UUID branchId) {
+        String fromDate = optionalString(params, "fromDate");
+        String toDate = optionalString(params, "toDate");
+        ZoneId reportZone = ZoneId.systemDefault();
+
+        Instant fromInstant = fromDate == null
+                ? null
+                : LocalDate.parse(fromDate).atStartOfDay(reportZone).toInstant();
+        Instant toInstant = toDate == null
+                ? null
+                : LocalDate.parse(toDate).plusDays(1).atStartOfDay(reportZone).toInstant();
+
+        return new PosReportCriteria(
+                branchId,
+                optionalString(params, "orderType"),
+                optionalString(params, "status"),
+                fromInstant,
+                toInstant
+        );
+    }
+
+    private static String optionalString(Map<String, Object> params, String key) {
+        Object value = params.get(key);
+        if (!(value instanceof String text) || text.isBlank()) {
+            return null;
         }
-        return item.getUnitCogsAmount().multiply(BigDecimal.valueOf(item.getQuantity()));
-    }
-
-    private static int quantityOf(OrderItem item) {
-        return item.getQuantity() != null ? item.getQuantity() : 0;
-    }
-
-    private static String productKey(OrderItem item) {
-        return (item.getProductCode() == null ? "" : item.getProductCode())
-                + "|"
-                + (item.getVariantName() == null ? "" : item.getVariantName());
-    }
-
-    private BigDecimal sumAmount(List<OrderItem> items, Function<OrderItem, BigDecimal> extractor) {
-        return items.stream()
-                .map(extractor)
-                .filter(Objects::nonNull)
-                .reduce(BigDecimal.ZERO, BigDecimal::add);
-    }
-
-    // ==== HELPERS ====
-
-    private java.math.BigDecimal sum(List<Order> orders, Function<Order, java.math.BigDecimal> extractor) {
-        return orders.stream()
-                .map(extractor)
-                .filter(Objects::nonNull)
-                .reduce(java.math.BigDecimal.ZERO, java.math.BigDecimal::add);
-    }
-
-    /** Bảng phụ phân bổ doanh thu theo phương thức thanh toán (Sheet 2). */
-    private List<Map<String, Object>> paymentMethodBreakdown(List<Order> orders) {
-        Map<String, Long> counts = orders.stream()
-                .collect(Collectors.groupingBy(PosReportHandler::paymentChannelOf, Collectors.counting()));
-        Map<String, java.math.BigDecimal> amounts = orders.stream()
-                .collect(Collectors.groupingBy(PosReportHandler::paymentChannelOf,
-                        Collectors.reducing(java.math.BigDecimal.ZERO,
-                                o -> o.getTotalAmount() != null ? o.getTotalAmount() : java.math.BigDecimal.ZERO,
-                                java.math.BigDecimal::add)));
-
-        List<Map<String, Object>> rows = new ArrayList<>();
-        counts.keySet().stream().sorted().forEach(channel -> {
-            Map<String, Object> row = new LinkedHashMap<>();
-            row.put("channel", channel);
-            row.put("orderCount", counts.get(channel));
-            row.put("amount", amounts.getOrDefault(channel, java.math.BigDecimal.ZERO));
-            rows.add(row);
-        });
-        return rows;
+        return text.trim();
     }
 }

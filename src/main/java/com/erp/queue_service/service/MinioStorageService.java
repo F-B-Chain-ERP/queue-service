@@ -7,7 +7,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
-import java.io.ByteArrayInputStream;
+import java.io.*;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.util.UUID;
@@ -54,6 +54,33 @@ public class MinioStorageService {
             return publicUrl + "/" + bucketName + "/" + objectKey;
         } catch (Exception e) {
             log.error("[MinIO] Lỗi khi tải tệp lên MinIO (key={}): {}", objectKey, e.getMessage(), e);
+            throw new RuntimeException("Lỗi lưu trữ tệp báo cáo: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Tải tệp tạm trực tiếp lên MinIO theo objectKey chỉ định trước bằng InputStream.
+     * Tránh đọc toàn bộ file thành mảng byte[] trong heap RAM.
+     *
+     * @param file        File tạm thời chứa dữ liệu báo cáo
+     * @param objectKey   Khóa định danh tệp
+     * @param contentType MIME type
+     * @return URL tải file
+     */
+    public String uploadReportFromFile(File file, String objectKey, String contentType) {
+        try (InputStream in = new BufferedInputStream(new FileInputStream(file))) {
+            minioClient.putObject(
+                    PutObjectArgs.builder()
+                            .bucket(bucketName)
+                            .object(objectKey)
+                            .stream(in, file.length(), -1)
+                            .contentType(contentType)
+                            .build()
+            );
+            log.info("[MinIO] Đã tải lên báo cáo từ file tạm thành công: key '{}', size: {} bytes", objectKey, file.length());
+            return publicUrl + "/" + bucketName + "/" + objectKey;
+        } catch (Exception e) {
+            log.error("[MinIO] Lỗi khi tải tệp tạm lên MinIO (key={}): {}", objectKey, e.getMessage(), e);
             throw new RuntimeException("Lỗi lưu trữ tệp báo cáo: " + e.getMessage(), e);
         }
     }

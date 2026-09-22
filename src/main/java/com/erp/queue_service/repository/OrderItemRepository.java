@@ -15,4 +15,5 @@ public interface OrderItemRepository extends JpaRepository<OrderItem, UUID> {
 
     /** Lấy toàn bộ chi tiết đơn của một tập hợp đơn hàng (dùng cho grouped query tránh N+1). */
     List<OrderItem> findByOrderIdIn(Collection<UUID> orderIds);
+
 }
