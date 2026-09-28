@@ -75,34 +75,6 @@ public class RabbitMQConsumerConfig {
         return BindingBuilder.bind(reportDlq).to(reportDlExchange).with(reportDlRoutingKey);
     }
 
-    public String getReportExchange() {
-        return reportExchange;
-    }
-
-    public String getReportDlExchange() {
-        return reportDlExchange;
-    }
-
-    public String getReportQueue() {
-        return reportQueue;
-    }
-
-    public String getReportDlq() {
-        return reportDlq;
-    }
-
-    public String getReportRoutingKey() {
-        return reportRoutingKey;
-    }
-
-    public String getReportDlRoutingKey() {
-        return reportDlRoutingKey;
-    }
-
-    public int getReportTtl() {
-        return reportTtl;
-    }
-
     @Bean
     public JacksonJsonMessageConverter jsonMessageConverter() {
         return new JacksonJsonMessageConverter();
